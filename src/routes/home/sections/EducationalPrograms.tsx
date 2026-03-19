@@ -19,10 +19,10 @@ const educationalPrograms: EducationalProgram[] = [
     {
         title: "Бакалаврат",
         specialties: [
-            { name: "D2 «Фінанси, банківська справа, страхування та фондовий ринок» (ОПП «Фінанси та бізнес-аналітика»)", link: "https://vstup.oa.edu.ua/specialnosti/finansi-bankivska-sprava-ta-strahuvannya" },
             { name: "F3 «Комп'ютерні науки» (ОПП «Комп'ютерні науки»)", link: "https://vstup.oa.edu.ua/specialnosti/kompyuterni-nauki" },
-            { name: "D3 «Менеджмент» (ОПП «Підприємництво та управління бізнесом»)", link: "https://vstup.oa.edu.ua/specialnosti/business_and_trade" },
             { name: "F3 «Комп'ютерні науки» (ОПП «Програмування роботизованих систем» (Робототехніка))", link: "https://vstup.oa.edu.ua/specialnosti/robotics_and_machine_learning" },
+            { name: "D2 «Фінанси, банківська справа, страхування та фондовий ринок» (ОПП «Фінанси та бізнес-аналітика»)", link: "https://vstup.oa.edu.ua/specialnosti/finansi-bankivska-sprava-ta-strahuvannya" },
+            { name: "D3 «Менеджмент» (ОПП «Підприємництво та управління бізнесом»)", link: "https://vstup.oa.edu.ua/specialnosti/business_and_trade" },
             { name: "D5 «Маркетинг» (ОПП «DATA-маркетинг та аналітика»)", link: "https://vstup.oa.edu.ua/specialnosti/data-marketing-ta-analitika" },
         ],
         image: "/images/EducationalPrograms/BachelorsDegree.png",
@@ -30,9 +30,9 @@ const educationalPrograms: EducationalProgram[] = [
     {
         title: "Магістратура",
         specialties: [
+            { name: "F3 «Комп'ютерні науки» (ОПП «Управління IT-проєктами»)", link: "https://vstup.oa.edu.ua/specialnosti/upravlinnya-proektami" },
             { name: "D2 «Фінанси, банківська справа та страхування» (ОПП «Фінанси та бізнес-аналітика»)", link: "https://vstup.oa.edu.ua/specialnosti/finansi-bankivska-sprava-ta-strahuvannya" },
             { name: "D3 «Менеджмент» (ОПП «Менеджмент продажів та логістика»)", link: "https://vstup.oa.edu.ua/specialnosti/menedzhment-prodazhiv-ta-logistika" },
-            { name: "F3 «Комп'ютерні науки» (ОПП «Управління IT-проєктами»)", link: "https://vstup.oa.edu.ua/specialnosti/upravlinnya-proektami" },
             { name: "D3 «Менеджмент» (ОПП «HR-менеджмент»)", link: "https://vstup.oa.edu.ua/specialnosti/hr-menedzhment" },
             { name: "D1 «Облік і оподаткування» (ОПП «Облік і оподаткування»)", link: "https://vstup.oa.edu.ua/specialnosti/oblik-i-opodatkuvannya" },
         ],
@@ -41,8 +41,8 @@ const educationalPrograms: EducationalProgram[] = [
     {
         title: "Аспірантура",
         specialties: [
-            { name: "D3 «Менеджмент» (ОНП «Менеджмент»)", link: "https://www.oa.edu.ua/ua/osvita/ects/info_prog/doc/itb/d3_menedzhment/" },
             { name: "F1 «Прикладна математика» (ОНП «Прикладна математика»)", link: "https://www.oa.edu.ua/ua/osvita/ects/info_prog/doc/itb/f1_prykladna_matematyka/" },
+            { name: "D3 «Менеджмент» (ОНП «Менеджмент»)", link: "https://www.oa.edu.ua/ua/osvita/ects/info_prog/doc/itb/d3_menedzhment/" },
         ],
         image: "/images/EducationalPrograms/PostgraduateStudies.png",
     },

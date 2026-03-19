@@ -4,13 +4,10 @@ import { ScrollReveal } from "@/components/effects/ScrollReveal";
 
 const tags = ["ІТ", "БІЗНЕС", "МЕНЕДЖМЕНТ", "ФІНАНСИ", "МАРКЕТИНГ"];
 
-const ctaLine = ["Обирай", "навчання,"];
+const ctaLine = ["Навчально-науковий", "інститут"];
 const titleLines = [
-  ["яке", "відповідає", "викликам", "майбутнього!"],
+  ["інформаційних", "технологій", "та", "бізнесу"],
 ];
-
-/** Words that get the hero call-to-action gradient */
-const heroCallWords = new Set(["Обирай", "навчання,"]);
 
 export const HeroWithAbout = (): JSX.Element => {
   const shapeRef = useRef<HTMLDivElement>(null);
@@ -75,14 +72,14 @@ export const HeroWithAbout = (): JSX.Element => {
       <div className="relative min-h-[400px] md:min-h-[500px] lg:min-h-[calc(100vh-80px)] max-w-7xl 2xl:max-w-screen-2xl mx-auto px-4 md:px-9 flex flex-col justify-end items-center pb-0 lg:pb-2 z-10">
         <div className="relative z-10 pt-48 lg:pt-32 w-full flex flex-col items-center text-center" style={{ perspective: "600px" }}>
           {/* Main Call to Action Line */}
-          <div className="flex justify-center items-baseline w-full flex-wrap gap-x-3 md:gap-x-4 gap-y-1 md:gap-y-2 mb-2 md:mb-4 lg:mb-6">
+          <div className="flex justify-center items-baseline w-full flex-wrap gap-x-3 md:gap-x-4 gap-y-1 md:gap-y-2 mb-2 md:mb-4 lg:mb-4">
             {ctaLine.map((word) => {
               const delay = wordIndex * 120;
               wordIndex++;
               return (
                 <span
                   key={word}
-                  className="font-bold text-4xl md:text-6xl lg:text-7xl 2xl:text-[110px] leading-[1.05] tracking-[-0.02em] gradient-text-hero-call"
+                  className="font-bold text-4xl md:text-5xl lg:text-6xl 2xl:text-[80px] leading-[1.05] tracking-[-0.02em] gradient-text-hero-call"
                   style={{
                     opacity: 0,
                     animation: `hero-word-enter 0.8s cubic-bezier(0.16,1,0.3,1) ${delay}ms forwards, gradient-shift 7s ease-in-out infinite`,
@@ -106,7 +103,7 @@ export const HeroWithAbout = (): JSX.Element => {
                 return (
                   <span
                     key={word}
-                    className="font-bold text-pure-white text-3xl md:text-5xl lg:text-6xl 2xl:text-[80px] leading-[1.05] tracking-[-0.02em]"
+                    className="font-bold text-pure-white text-3xl md:text-4xl lg:text-5xl 2xl:text-[64px] leading-[1.05] tracking-[-0.02em]"
                     style={{
                       opacity: 0,
                       animation: `hero-word-enter 0.8s cubic-bezier(0.16,1,0.3,1) ${delay}ms forwards`,
@@ -149,16 +146,12 @@ export const HeroWithAbout = (): JSX.Element => {
           <div className="grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] gap-10 lg:gap-16 items-center">
             {/* Left Column - Text */}
             <div className="flex flex-col gap-6 md:gap-8 w-full border-l-[3px] border-brand-blue-light/30 pl-5 md:pl-8 py-2">
-              <ScrollReveal variant="fade-up" delay={100}>
-                <p className="text-pure-white/90 text-lg md:text-xl xl:text-2xl 2xl:text-3xl leading-[1.6] md:leading-[1.7] font-light tracking-wide">
-                  Інститут інформаційних технологій та бізнесу — простір, де народжуються лідери цифрової ери. Ми поєднуємо технології, бізнес та інновації, щоб готувати фахівців, які не просто адаптуються до змін, а й створюють їх.
-                </p>
-              </ScrollReveal>
-              <ScrollReveal variant="fade-up" delay={250}>
-                <p className="text-pure-white/90 text-lg md:text-xl xl:text-2xl 2xl:text-3xl leading-[1.6] md:leading-[1.7] font-light tracking-wide">
-                  Наші студенти отримують актуальні знання та практичний досвід у IT, аналітиці, управлінні й підприємництві. Співпраця з провідними компаніями дає їм конкурентні переваги у світі технологій та бізнесу.
-                </p>
-              </ScrollReveal>
+              <p className="text-pure-white/90 text-lg md:text-xl xl:text-2xl 2xl:text-3xl leading-[1.6] md:leading-[1.7] font-light tracking-wide">
+                Інститут інформаційних технологій та бізнесу — простір, де народжуються лідери цифрової ери. Ми поєднуємо технології, бізнес та інновації, щоб готувати фахівців, які не просто адаптуються до змін, а й створюють їх.
+              </p>
+              <p className="text-pure-white/90 text-lg md:text-xl xl:text-2xl 2xl:text-3xl leading-[1.6] md:leading-[1.7] font-light tracking-wide">
+                Наші студенти отримують актуальні знання та практичний досвід у IT, аналітиці, управлінні й підприємництві. Співпраця з провідними компаніями дає їм конкурентні переваги у світі технологій та бізнесу.
+              </p>
             </div>
 
             {/* Right Column - Image with zoom effect */}

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type JSX } from "react";
 import { ParticleCanvas } from "@/components/effects/ParticleCanvas";
 import { ScrollReveal } from "@/components/effects/ScrollReveal";
+import { InnovationsBadge } from "@/components/ui/InnovationsBadge";
 
 const tags = ["ІТ", "БІЗНЕС", "МЕНЕДЖМЕНТ", "ФІНАНСИ", "МАРКЕТИНГ"];
 
@@ -63,7 +64,7 @@ export const HeroWithAbout = (): JSX.Element => {
         <img
           className="w-full h-full object-contain"
           alt="Element black chrome"
-          src="/images/Home/3d-black-chrome-shape.png"
+          src="/images/Home/3d-black-chrome-shape.webp"
           style={{ filter: 'hue-rotate(-20deg) brightness(1.55) saturate(2.0)' }}
         />
       </div>
@@ -115,6 +116,15 @@ export const HeroWithAbout = (): JSX.Element => {
               })}
             </div>
           ))}
+          <div
+            className="mt-6 md:mt-12"
+            style={{
+              opacity: 0,
+              animation: `hero-word-enter 1s cubic-bezier(0.16,1,0.3,1) ${wordIndex * 120 + 200}ms forwards`,
+            }}
+          >
+            <InnovationsBadge />
+          </div>
         </div>
       </div>
 
@@ -158,7 +168,7 @@ export const HeroWithAbout = (): JSX.Element => {
             <ScrollReveal variant="fade-left" delay={300} className="hidden lg:flex justify-end">
               <div className="img-zoom-container rounded-2xl shadow-lg overflow-hidden">
                 <img
-                  src="/images/Home/pexels-mikae.jpg"
+                  src="/images/Home/pexels-mikae.webp"
                   alt="Students working"
                   className="w-full xl:w-[300px] 2xl:w-[400px] aspect-[3/4] object-cover"
                 />

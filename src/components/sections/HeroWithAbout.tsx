@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import { ParticleCanvas } from "@/components/effects/ParticleCanvas";
+import { InnovationsBadge } from "@/components/ui/InnovationsBadge";
 
 import type { HeroWithAboutData } from "./hero-with-about.types";
 
@@ -8,7 +9,7 @@ interface HeroWithAboutProps {
 }
 
 const defaultShapeImage = {
-  src: "/images/IT/3D Black Chrome Shape1.png",
+  src: "/images/IT/3D Black Chrome Shape1.webp",
   alt: "Element black chrome",
   width: 1426,
   height: 1456,
@@ -69,6 +70,9 @@ export const HeroWithAbout = ({ data }: HeroWithAboutProps): JSX.Element => {
               {heroTitle}
             </h1>
           </div>
+
+          <InnovationsBadge className="mb-8" />
+
           <div className="w-full h-[0.9px] bg-pure-white/35 mb-10"></div>
 
           <div className="flex flex-col md:flex-row justify-between items-end w-full gap-8 mt-8">

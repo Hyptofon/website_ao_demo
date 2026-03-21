@@ -1,5 +1,6 @@
 import type { JSX } from "react";
 import { ParticleCanvas } from "@/components/effects/ParticleCanvas";
+import { InnovationsBadge } from "@/components/ui/InnovationsBadge";
 
 export const InstituteHero = (): JSX.Element => {
     return (
@@ -27,6 +28,8 @@ export const InstituteHero = (): JSX.Element => {
                     <span>Про інститут</span>
                     <span className="text-gray-200">Інформаційних технологій та Бізнесу</span>
                 </h1>
+
+                <InnovationsBadge className="mb-8 animate-fade-in opacity-0 [--animation-delay:200ms]" />
 
                 <div className="w-full h-[1px] bg-white/20 mb-8"></div>
 
@@ -58,7 +61,7 @@ export const InstituteHero = (): JSX.Element => {
 
                     <div className="hidden lg:block relative w-full xl:w-[320px] 2xl:w-[400px] aspect-[3/4] rounded-xl overflow-hidden lg:-mt-20 mx-auto animate-fade-in opacity-0 [--animation-delay:400ms]">
                         <img
-                            src="/images/IT/ScientificActivity.jpg"
+                            src="/images/IT/ScientificActivity.webp"
                             alt="Digital Innovation"
                             className="w-full h-full object-cover"
                             decoding="async"

@@ -18,27 +18,22 @@
  *   <TeamShowcase members={members} />
  *   <TeamShowcase members={members} heading="Наша команда" badge="Команда" />
  */
-import { useState, useRef, type MouseEvent, type JSX } from "react";
+import { Mail } from "lucide-react";
 import {
-  motion,
   AnimatePresence,
+  motion,
   useMotionValue,
   useSpring,
   useTransform,
 } from "motion/react";
-import { Mail } from "lucide-react";
+import { useRef, useState, type JSX, type MouseEvent } from "react";
+
+import type { Locale } from "@/i18n";
+import { getTranslations } from "@/i18n";
 import { cn } from "@/lib/utils";
+import { TeamAvatarDock } from "./TeamAvatarDock";
 
 /* ── Types ── */
-
-export interface TeamMemberSocial {
-  /** The JSX icon element */
-  icon: JSX.Element;
-  /** URL to link to */
-  href: string;
-  /** Accessible label */
-  label: string;
-}
 
 export interface TeamMember {
   id: number;
@@ -52,8 +47,6 @@ export interface TeamMember {
   image: string;
   /** Optional office hours text */
   officeHours?: string;
-  /** Optional social links for this person */
-  socials?: TeamMemberSocial[];
 }
 
 export interface TeamShowcaseProps {
@@ -67,19 +60,22 @@ export interface TeamShowcaseProps {
   sectionId?: string;
   /** Extra class names for the root wrapper */
   className?: string;
-  /** Default social links to show for every member (used if member.socials is undefined) */
-  defaultSocials?: TeamMemberSocial[];
+  /** Locale for translations */
+  locale?: Locale;
 }
 
 /* ── Main component ── */
 export const TeamShowcase = ({
   members,
-  badge = "Наша команда",
-  heading = "Керівництво інституту",
+  badge,
+  heading,
   sectionId = "leadership",
   className,
-  defaultSocials,
+  locale,
 }: TeamShowcaseProps) => {
+  const t = getTranslations(locale);
+  const displayBadge = badge ?? t.teamShowcase.badge;
+  const displayHeading = heading ?? t.teamShowcase.heading;
   const [currentIndex, setCurrentIndex] = useState(0);
   const currentMember = members[currentIndex];
 
@@ -108,98 +104,46 @@ export const TeamShowcase = ({
     y.set(0);
   };
 
-  const memberSocials = currentMember.socials ?? defaultSocials ?? [];
-
-  /* ── Avatar Dock (rendered in two places: mobile top, desktop bottom) ── */
-  const renderAvatarDock = (dockClassName?: string) => (
-    <div className={cn("w-full relative z-20", dockClassName)}>
-      <p className="text-[10px] md:text-xs text-gray-400 font-medium uppercase tracking-widest mb-3 md:mb-4 lg:hidden">
-        Виберіть для перегляду
-      </p>
-      <p className="hidden lg:block text-[10px] md:text-xs text-gray-400 font-medium uppercase tracking-widest mb-3 md:mb-4">
-        Вся команда інституту
-      </p>
-      <div className="bg-white border border-gray-100 shadow-[0_8px_30px_var(--color-shadow-card-alt)] p-2 md:p-3 rounded-3xl md:rounded-full flex flex-wrap gap-2 md:gap-4 items-center justify-center lg:justify-start max-w-3xl mx-auto lg:mx-0">
-        {members.map((member, idx) => {
-          const isActive = currentIndex === idx;
-          return (
-            <button
-              key={member.id}
-              onClick={() => setCurrentIndex(idx)}
-              className="group relative focus:outline-none"
-              aria-label={member.name}
-              title={member.name}
-            >
-              {/* Active Ring Indicator */}
-              {isActive && (
-                <motion.div
-                  layoutId="active-avatar-ring"
-                  className="absolute inset-0 rounded-full border-[2.5px] border-blue-500"
-                  transition={{
-                    type: "spring",
-                    stiffness: 300,
-                    damping: 30,
-                  }}
-                />
-              )}
-              <div
-                className={cn(
-                  "w-12 h-12 md:w-14 md:h-14 rounded-full overflow-hidden transition-all duration-300 border-[3px] border-transparent",
-                  isActive
-                    ? "opacity-100 scale-[0.85]"
-                    : "opacity-50 hover:opacity-100 hover:scale-[0.9] grayscale-[50%] hover:grayscale-0"
-                )}
-              >
-                <img
-                  src={member.image}
-                  alt={member.name}
-                  className="w-full h-full object-cover"
-                />
-              </div>
-
-              {/* Tooltip on hover (desktop only) */}
-              <div className="hidden lg:block absolute bottom-full mb-3 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity duration-300 z-50 whitespace-nowrap bg-gray-900 text-white text-xs px-3 py-1.5 rounded-lg shadow-xl">
-                {member.name.split(" ")[0]} {member.name.split(" ")[1]}
-              </div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-
   return (
     <section
       id={sectionId}
       className={cn(
-        "w-full bg-pure-white py-12 md:py-24 min-h-[700px] lg:min-h-[900px] flex items-center relative overflow-hidden",
-        className
+        "w-full bg-pure-white py-8 md:py-14 min-h-[560px] lg:min-h-[640px] flex items-center relative overflow-hidden",
+        className,
       )}
     >
       {/* Soft creative background flare */}
-      <div className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-100/50 rounded-full blur-[100px] translate-x-1/3 -translate-y-1/3 pointer-events-none" />
+      <div
+        className="absolute top-0 right-0 w-[500px] h-[500px] bg-blue-100/30 rounded-full blur-[100px] translate-x-1/3 -translate-y-1/3 pointer-events-none"
+        aria-hidden="true"
+      />
 
       <div className="flex flex-col max-w-7xl 2xl:max-w-screen-2xl mx-auto w-full px-4 md:px-9 relative z-10">
         {/* Header */}
         <header className="flex flex-col items-center mb-6 lg:mb-16 w-full text-center">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-600 text-sm font-semibold tracking-wide mb-3 lg:mb-5">
             <span className="w-1.5 h-1.5 rounded-full bg-blue-600"></span>
-            {badge}
+            {displayBadge}
           </div>
           <h2 className="font-semibold text-pure-black text-3xl md:text-5xl lg:text-6xl tracking-tight leading-[1.1]">
-            {heading}
+            {displayHeading}
           </h2>
         </header>
 
         {/* Mobile Only: Avatar Dock (Top) */}
-        {renderAvatarDock(
-          "mb-2 md:mb-3 w-full flex flex-col items-center lg:hidden"
-        )}
+        <TeamAvatarDock
+          members={members}
+          currentIndex={currentIndex}
+          setCurrentIndex={setCurrentIndex}
+          t={t}
+          dockClassName="mb-2 md:mb-3 w-full flex flex-col items-center lg:hidden"
+          layoutIdSuffix="-mobile"
+        />
 
         <div className="flex flex-col lg:flex-row gap-0 md:gap-4 lg:gap-24 items-center lg:items-stretch justify-center w-full max-w-5xl mx-auto">
           {/* Interactive 3D Image Card */}
           <div
-            className="w-full max-w-[12.5rem] sm:max-w-[16.25rem] md:max-w-[22.5rem] lg:max-w-[26.25rem] xl:max-w-[28.125rem] shrink-0 flex justify-center"
+            className="w-full max-w-[12.5rem] sm:max-w-[14rem] md:max-w-[18rem] lg:max-w-[20rem] xl:max-w-[22rem] shrink-0 flex justify-center"
             style={{ perspective: "1000px" }}
           >
             <motion.div
@@ -211,7 +155,7 @@ export const TeamShowcase = ({
                 rotateY,
                 transformStyle: "preserve-3d",
               }}
-              className="relative w-full aspect-[4/5] lg:aspect-auto lg:h-full rounded-[2rem] shadow-2xl bg-white border border-gray-100 cursor-crosshair group p-2.5 md:p-3.5 lg:p-4"
+              className="relative w-full aspect-[4/5] rounded-[2rem] shadow-2xl bg-white border border-gray-100 cursor-crosshair group p-2.5 md:p-3.5 lg:p-4"
             >
               <div
                 className="relative w-full h-full rounded-[1.25rem] md:rounded-[1.5rem] overflow-hidden bg-gray-50"
@@ -225,6 +169,8 @@ export const TeamShowcase = ({
                     key={currentMember.id}
                     src={currentMember.image}
                     alt={currentMember.name}
+                    width={400}
+                    height={500}
                     initial={{
                       opacity: 0,
                       filter: "blur(8px)",
@@ -286,7 +232,7 @@ export const TeamShowcase = ({
                     </div>
                     <div className="flex flex-col justify-center">
                       <span className="text-[10px] md:text-xs text-blue-600 font-semibold uppercase tracking-wider mb-0.5 md:mb-1">
-                        Електронна пошта
+                        {t.teamShowcase.emailLabel}
                       </span>
                       <a
                         href={`mailto:${currentMember.email}`}
@@ -296,37 +242,17 @@ export const TeamShowcase = ({
                       </a>
                     </div>
                   </div>
-
-                  {memberSocials.length > 0 && (
-                    <>
-                      <div className="h-px w-full bg-gray-100" />
-                      <div className="flex flex-col gap-2 text-left w-full mt-2">
-                        <span className="text-[10px] md:text-xs text-blue-600 font-semibold uppercase tracking-wider">
-                          Соціальні мережі
-                        </span>
-                        <div className="flex gap-4 items-center mt-1">
-                          {memberSocials.map((social, idx) => (
-                            <a
-                              key={idx}
-                              href={social.href}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              aria-label={social.label}
-                              className="group/social transition-transform duration-300 hover:scale-110 focus:outline-none"
-                            >
-                              {social.icon}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    </>
-                  )}
                 </div>
 
                 {/* Desktop Only: Avatar Dock (Bottom) */}
-                {renderAvatarDock(
-                  "mt-6 md:mt-8 w-full max-w-md mx-0 relative z-20 hidden lg:flex flex-col items-start"
-                )}
+                <TeamAvatarDock
+                  members={members}
+                  currentIndex={currentIndex}
+                  setCurrentIndex={setCurrentIndex}
+                  t={t}
+                  dockClassName="mt-6 md:mt-8 w-full max-w-md mx-0 relative z-20 hidden lg:flex flex-col items-start"
+                  layoutIdSuffix="-desktop"
+                />
               </div>
             </div>
           </div>

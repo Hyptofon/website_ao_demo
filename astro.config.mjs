@@ -12,7 +12,30 @@ export default defineConfig({
   site: 'https://website-ao.vercel.app',
   vite: {
     plugins: [tailwindcss()],
+    ssr: {
+      noExternal: ['motion'],
+    },
+    optimizeDeps: {
+      include: ['motion', 'motion/react'],
+    },
   },
-
-  integrations: [react(), sitemap()]
+  i18n: {
+    defaultLocale: 'uk',
+    locales: ['uk', 'en'],
+    routing: {
+      prefixDefaultLocale: false,
+    },
+    fallback: {
+      en: 'uk',
+    },
+  },
+  integrations: [
+    react(),
+    sitemap({
+      i18n: {
+        defaultLocale: 'uk',
+        locales: { uk: 'uk-UA', en: 'en-US' },
+      },
+    }),
+  ],
 });

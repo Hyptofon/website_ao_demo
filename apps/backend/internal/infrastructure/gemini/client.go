@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	modelGenerate = "gemini-2.5-flash"
+	modelGenerate = "gemini-3-flash-preview"
 	modelEmbed    = "gemini-embedding-001"
 	maxConcurrent = 50
 )
@@ -40,6 +40,11 @@ func NewClient(ctx context.Context, apiKey string) (*Client, error) {
 // Close is a no-op for the new SDK but keeps the interface stable.
 func (c *Client) Close() error {
 	return nil
+}
+
+// RawClient returns the underlying genai.Client for use by other infrastructure components.
+func (c *Client) RawClient() *genai.Client {
+	return c.client
 }
 
 // Embed returns a vector for the given text using text-embedding-004.
@@ -77,14 +82,14 @@ func (c *Client) StreamAnswer(
 	}
 	promptBuilder.WriteString(userQuery)
 
-	temperature := float32(0.2)
-	topP := float32(0.9)
+	// No longer using thinkingLevelVal
 
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-		Temperature:       &temperature,
-		TopP:              &topP,
-		MaxOutputTokens:   1024,
+		MaxOutputTokens:   1536,
+		ThinkingConfig: &genai.ThinkingConfig{
+			ThinkingLevel: genai.ThinkingLevel("low"),
+		},
 	}
 
 	for resp, err := range c.client.Models.GenerateContentStream(

@@ -109,7 +109,21 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 	result, err := h.askBot.Handle(ctx, queries.AskBotQuery{Request: &req}, &sseWriter{w: w, flusher: flusher})
 	if err != nil {
 		log.Printf("[ERROR] RAG pipeline: %v", err)
-		sseError(w, flusher, "internal_error", "Failed to generate response", http.StatusInternalServerError)
+		
+		msg := "Failed to generate response. Please try again."
+		if req.Language == domain.LangUk {
+			msg = "Не вдалося згенерувати відповідь. Будь ласка, спробуйте ще раз."
+		}
+		
+		if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "429") {
+			if req.Language == domain.LangUk {
+				msg = "Сервери штучного інтелекту зараз перевантажені. Зачекайте хвилинку і спробуйте знову."
+			} else {
+				msg = "AI servers are currently overloaded. Please wait a moment and try again."
+			}
+		}
+		
+		sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
 		return
 	}
 

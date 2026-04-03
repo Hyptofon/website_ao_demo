@@ -48,7 +48,22 @@ export function streamChat(
 
       if (!res.ok || !res.body) {
         const body = await res.text();
-        callbacks.onError("http_error", `HTTP ${res.status}: ${body}`);
+        let errMsg = body;
+        let errCode = "http_error";
+        
+        // The backend sends errors as SSE events format: event: error\ndata: {"error":"...", "message":"..."}
+        if (body.includes("data: {")) {
+          const match = body.match(/data: (\{.*?\})/);
+          if (match) {
+            try {
+              const parsed = JSON.parse(match[1]);
+              if (parsed.error) errCode = parsed.error;
+              if (parsed.message) errMsg = parsed.message;
+            } catch {}
+          }
+        }
+        
+        callbacks.onError(errCode, errMsg);
         return;
       }
 

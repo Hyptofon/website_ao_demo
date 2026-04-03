@@ -15,6 +15,7 @@ import (
 	"university-chatbot/backend/internal/application/features/chat/queries"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
+	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/qdrant"
 	"university-chatbot/backend/internal/infrastructure/security"
 	"university-chatbot/backend/internal/infrastructure/sqlite"
@@ -72,13 +73,14 @@ func main() {
 	rateLimiter := security.NewRateLimiter(10, 5*time.Minute, 3)
 	offTopicFilter := security.NewOffTopicFilter()
 
-	// ── Document chunker ───────────────────────────────────────────────────────
+	// ── Document processing ────────────────────────────────────────────────────
 	chunkr := chunker.NewChunker()
+	pdfExtractor := parser.NewPDFExtractor(geminiClient.RawClient())
 
 	// ── If --index flag is provided: index documents and exit ──────────────────
 	if *indexDir != "" {
 		log.Printf("Indexing documents from %q ...", *indexDir)
-		ih := chathttp.NewIndexHandler(qdrantClient, chunkr)
+		ih := chathttp.NewIndexHandler(qdrantClient, chunkr, pdfExtractor)
 		if err := ih.IndexDocumentsFromDir(ctx, *indexDir); err != nil {
 			log.Fatalf("Indexing failed: %v", err)
 		}
@@ -92,7 +94,7 @@ func main() {
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter, offTopicFilter)
-	router := chathttp.NewRouter(chatHttp, qdrantClient, chunkr, cfg.AllowedOrigins)
+	router := chathttp.NewRouter(chatHttp, qdrantClient, chunkr, pdfExtractor, cfg.AllowedOrigins)
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%s", cfg.Port)

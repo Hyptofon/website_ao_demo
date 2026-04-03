@@ -6,6 +6,7 @@ import (
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
+	"university-chatbot/backend/internal/infrastructure/parser"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -16,6 +17,7 @@ func NewRouter(
 	chatHandler *ChatHandler,
 	vs domain.VectorStore,
 	c *chunker.Chunker,
+	pe *parser.PDFExtractor,
 	allowedOrigins []string,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -49,7 +51,7 @@ func NewRouter(
 
 	// ── Admin (Phase 1: no OAuth, just a shared secret header) ────────────────
 	r.Route("/admin", func(r chi.Router) {
-		r.Post("/documents/upload", AdminUploadHandler(vs, c))
+		r.Post("/documents/upload", AdminUploadHandler(vs, c, pe))
 	})
 
 	return r

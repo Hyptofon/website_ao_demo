@@ -6,71 +6,113 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
+	"university-chatbot/backend/internal/infrastructure/parser"
 )
 
 // IndexHandler handles document indexing for the admin CLI / seeding.
 type IndexHandler struct {
-	vectorStore domain.VectorStore
-	chunker     *chunker.Chunker
+	vectorStore  domain.VectorStore
+	chunker      *chunker.Chunker
+	pdfExtractor *parser.PDFExtractor
 }
 
 // NewIndexHandler constructs the handler.
-func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker) *IndexHandler {
-	return &IndexHandler{vectorStore: vs, chunker: c}
+func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor) *IndexHandler {
+	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe}
 }
 
-// IndexDocumentsFromDir reads all .txt files from dir and indexes them into Qdrant.
+// IndexDocumentsFromDir reads all supported files from dir and indexes them into Qdrant.
+// Supported formats: .txt, .pdf, .docx, .xlsx
 func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) error {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return fmt.Errorf("read dir %q: %w", dir, err)
 	}
 
+	var indexed, skipped, failed int
+
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".txt" {
+		if entry.IsDir() {
+			continue
+		}
+
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if !parser.IsSupported(entry.Name()) {
+			log.Printf("  [skip] %s — unsupported format %q", entry.Name(), ext)
+			skipped++
 			continue
 		}
 
 		path := filepath.Join(dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return fmt.Errorf("read %q: %w", path, err)
+
+		// Extract text based on file type
+		var text string
+		var extractErr error
+
+		if ext == ".pdf" {
+			log.Printf("  [pdf]  %s — extracting via Gemini...", entry.Name())
+			text, extractErr = h.pdfExtractor.ExtractText(ctx, path)
+		} else {
+			text, extractErr = parser.ExtractText(path)
 		}
 
+		if extractErr != nil {
+			log.Printf("  [FAIL] %s — %v", entry.Name(), extractErr)
+			failed++
+			continue
+		}
+
+		if strings.TrimSpace(text) == "" {
+			log.Printf("  [skip] %s — empty content after extraction", entry.Name())
+			skipped++
+			continue
+		}
+
+		// Generate deterministic document ID
 		docIDRaw := fmt.Sprintf("%s_%s", entry.Name(), time.Now().Format("2006-01-02"))
 		docIDHash := sha256.Sum256([]byte(docIDRaw))
 		docID := fmt.Sprintf("%x", docIDHash[:8])
 
-		// Detect language from filename: *_en.txt → en, else uk
+		// Detect language from filename: *_en.* → en, else uk
 		lang := "uk"
-		if len(entry.Name()) > 7 && entry.Name()[len(entry.Name())-7:len(entry.Name())-4] == "_en" {
+		nameWithoutExt := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if strings.HasSuffix(strings.ToLower(nameWithoutExt), "_en") {
 			lang = "en"
 		}
 
-		chunks := h.chunker.Chunk(docID, entry.Name(), "document", lang, string(data))
+		chunks := h.chunker.Chunk(docID, entry.Name(), "document", lang, text)
 		if len(chunks) == 0 {
-			fmt.Printf("  [skip] %s — no chunks extracted\n", entry.Name())
+			log.Printf("  [skip] %s — no chunks extracted (text too short?)", entry.Name())
+			skipped++
 			continue
 		}
 
 		if err := h.vectorStore.UpsertChunks(ctx, chunks); err != nil {
-			return fmt.Errorf("upsert %q: %w", entry.Name(), err)
+			log.Printf("  [FAIL] %s — upsert error: %v", entry.Name(), err)
+			failed++
+			continue
 		}
-		fmt.Printf("  [ok] %s → %d chunks\n", entry.Name(), len(chunks))
+
+		log.Printf("  [ok]   %s → %d chunks (%d chars extracted)", entry.Name(), len(chunks), len(text))
+		indexed++
 	}
+
+	log.Printf("Indexing summary: %d indexed, %d skipped, %d failed", indexed, skipped, failed)
 	return nil
 }
 
 // AdminUploadHandler handles POST /admin/documents/upload
-func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker) http.HandlerFunc {
-	ih := &IndexHandler{vectorStore: vs, chunker: c}
+func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor) http.HandlerFunc {
+	ih := &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe}
 	return func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseMultipartForm(50 << 20); err != nil {
 			jsonError(w, "invalid_form", "Cannot parse multipart form", http.StatusBadRequest)
@@ -85,9 +127,10 @@ func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker) http.HandlerF
 		defer file.Close()
 
 		// Validate extension
-		ext := filepath.Ext(header.Filename)
-		if ext != ".txt" && ext != ".pdf" && ext != ".docx" {
-			jsonError(w, "invalid_type", "Only .txt files supported in Phase 1", http.StatusBadRequest)
+		if !parser.IsSupported(header.Filename) {
+			jsonError(w, "invalid_type",
+				fmt.Sprintf("Unsupported format. Supported: %s", supportedExtList()),
+				http.StatusBadRequest)
 			return
 		}
 
@@ -97,8 +140,42 @@ func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker) http.HandlerF
 			return
 		}
 
-		docID := fmt.Sprintf("%x%d", header.Filename, time.Now().UnixNano())
-		chunks := ih.chunker.Chunk(docID, header.Filename, "document", "uk", string(data))
+		// For uploaded files, save to temp and parse
+		ext := strings.ToLower(filepath.Ext(header.Filename))
+		var text string
+
+		if ext == ".txt" {
+			text = string(data)
+		} else {
+			// Save to temp file for parser
+			tmpFile, err := os.CreateTemp("", "upload-*"+ext)
+			if err != nil {
+				jsonError(w, "temp_error", "Cannot create temp file", http.StatusInternalServerError)
+				return
+			}
+			defer os.Remove(tmpFile.Name())
+			defer tmpFile.Close()
+
+			if _, err := tmpFile.Write(data); err != nil {
+				jsonError(w, "write_error", "Cannot write temp file", http.StatusInternalServerError)
+				return
+			}
+			tmpFile.Close()
+
+			if ext == ".pdf" {
+				text, err = ih.pdfExtractor.ExtractText(r.Context(), tmpFile.Name())
+			} else {
+				text, err = parser.ExtractText(tmpFile.Name())
+			}
+			if err != nil {
+				jsonError(w, "parse_error", fmt.Sprintf("Cannot parse file: %v", err), http.StatusBadRequest)
+				return
+			}
+		}
+
+		docIDHash := sha256.Sum256([]byte(fmt.Sprintf("%s_%d", header.Filename, time.Now().UnixNano())))
+		docID := fmt.Sprintf("%x", docIDHash[:8])
+		chunks := ih.chunker.Chunk(docID, header.Filename, "document", "uk", text)
 
 		if err := vs.UpsertChunks(r.Context(), chunks); err != nil {
 			jsonError(w, "index_error", "Failed to index document", http.StatusInternalServerError)
@@ -110,6 +187,15 @@ func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker) http.HandlerF
 			"status":      "indexed",
 			"filename":    header.Filename,
 			"chunk_count": len(chunks),
+			"chars":       len(text),
 		})
 	}
+}
+
+func supportedExtList() string {
+	exts := make([]string, 0, len(parser.SupportedExtensions))
+	for ext := range parser.SupportedExtensions {
+		exts = append(exts, ext)
+	}
+	return strings.Join(exts, ", ")
 }

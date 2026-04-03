@@ -2,6 +2,7 @@ import type { Source } from "./api";
 import { submitFeedback } from "./api";
 import type { ChatMessage } from "./types";
 import { SourcesList } from "./SourcesList";
+import ReactMarkdown from 'react-markdown';
 
 interface MessageBubbleProps {
   message: ChatMessage;
@@ -51,7 +52,7 @@ export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
       <div className="cb-message__content-wrapper">
         <div className={`cb-message__bubble ${message.isStreaming ? "cb-message__bubble--streaming" : ""}`}>
           <div className="cb-message__text">
-            {message.content}
+            <ReactMarkdown>{message.content}</ReactMarkdown>
             {message.isStreaming && <span className="cb-cursor" aria-hidden="true" />}
           </div>
         </div>

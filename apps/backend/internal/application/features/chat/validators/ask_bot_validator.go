@@ -2,12 +2,10 @@ package validators
 
 import (
 	"strings"
-	"unicode/utf8"
 
+	"github.com/go-playground/validator/v10"
 	"university-chatbot/backend/internal/domain"
 )
-
-const maxQueryLength = 500
 
 // ValidationError represents a list of field-level validation failures.
 type ValidationError struct {
@@ -28,29 +26,31 @@ type FieldError struct {
 	Message string `json:"message"`
 }
 
-// AskBotValidator validates an incoming chat request before it reaches the handler.
-type AskBotValidator struct{}
+// AskBotValidator validates an incoming chat request.
+type AskBotValidator struct {
+	validate *validator.Validate
+}
 
-// Validate returns a *ValidationError if the request is invalid, otherwise nil.
+func NewAskBotValidator() *AskBotValidator {
+	return &AskBotValidator{validate: validator.New()}
+}
+
+// Validate uses go-playground/validator to enforce DTO tags.
 func (v *AskBotValidator) Validate(req *domain.ChatRequest) error {
-	var errs []FieldError
-
-	msg := strings.TrimSpace(req.Message)
-	if msg == "" {
-		errs = append(errs, FieldError{Field: "message", Message: "must not be empty"})
-	} else if utf8.RuneCountInString(msg) > maxQueryLength {
-		errs = append(errs, FieldError{
-			Field:   "message",
-			Message: "must not exceed 500 characters",
-		})
-	}
-
+	// Fallback logic for unsupported languages before validation
 	if req.Language != domain.LangUk && req.Language != domain.LangEn {
-		// Default to Ukrainian instead of failing
 		req.Language = domain.LangUk
 	}
 
-	if len(errs) > 0 {
+	err := v.validate.Struct(req)
+	if err != nil {
+		var errs []FieldError
+		for _, err := range err.(validator.ValidationErrors) {
+			errs = append(errs, FieldError{
+				Field:   strings.ToLower(err.Field()),
+				Message: err.Tag(),
+			})
+		}
 		return &ValidationError{Errors: errs}
 	}
 	return nil

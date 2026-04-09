@@ -7,6 +7,8 @@ import (
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/parser"
+	"university-chatbot/backend/internal/infrastructure/security"
+	"university-chatbot/backend/internal/infrastructure/sqlite"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -18,6 +20,8 @@ func NewRouter(
 	vs domain.VectorStore,
 	c *chunker.Chunker,
 	pe *parser.PDFExtractor,
+	jobsRepo *sqlite.JobRepository,
+	rateLimiter *security.RateLimiter,
 	allowedOrigins []string,
 ) *chi.Mux {
 	r := chi.NewRouter()
@@ -44,14 +48,17 @@ func NewRouter(
 
 	// ── Public Chat API ────────────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {
-		// SSE: POST body carries the query, response is streamed
-		r.Post("/chat/stream", chatHandler.StreamChat)
+		// Rate limit middleware applies specifically to the chat endpoints
+		r.With(RateLimitMiddleware(rateLimiter)).Post("/chat/stream", chatHandler.StreamChat)
 		r.Post("/feedback", chatHandler.SubmitFeedback)
 	})
 
+	indexHandler := NewIndexHandler(vs, c, pe, jobsRepo)
+
 	// ── Admin (Phase 1: no OAuth, just a shared secret header) ────────────────
 	r.Route("/admin", func(r chi.Router) {
-		r.Post("/documents/upload", AdminUploadHandler(vs, c, pe))
+		r.Post("/documents/upload", indexHandler.HandleAdminUpload)
+		r.Get("/documents/jobs/{job_id}", indexHandler.GetJobStatus)
 	})
 
 	return r

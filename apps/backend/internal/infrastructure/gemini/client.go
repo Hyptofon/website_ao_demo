@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	modelGenerate = "gemini-3-flash-preview"
+	modelGenerate = "gemini-2.5-flash"
 	modelEmbed    = "gemini-embedding-001"
 	maxConcurrent = 50
 )
@@ -87,10 +87,9 @@ func (c *Client) StreamAnswer(
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
 		MaxOutputTokens:   1536,
-		ThinkingConfig: &genai.ThinkingConfig{
-			ThinkingLevel: genai.ThinkingLevel("low"),
-		},
 	}
+
+	var textEmitted bool
 
 	for resp, err := range c.client.Models.GenerateContentStream(
 		ctx,
@@ -104,12 +103,17 @@ func (c *Client) StreamAnswer(
 		if resp == nil {
 			continue
 		}
-		for _, cand := range resp.Candidates {
+		
+		// TEST LOG: what is inside resp?
+		fmt.Printf("DEBUG RESP: %+v, Text: %v\n", resp, resp.Text)
+
+			for _, cand := range resp.Candidates {
 			if cand.Content == nil {
 				continue
 			}
 			for _, part := range cand.Content.Parts {
 				if part.Text != "" {
+					textEmitted = true
 					token := strings.ReplaceAll(part.Text, "\n", "\\n")
 					fmt.Fprintf(w, "data: %s\n\n", token)
 					if f, ok := w.(interface{ Flush() }); ok {
@@ -117,6 +121,18 @@ func (c *Client) StreamAnswer(
 					}
 				}
 			}
+		}
+	}
+
+	if !textEmitted {
+		fallbackText := "На жаль, я не знайшов відповіді на це запитання у своїх документах. Можливо, варто перефразувати запит або звернутися безпосередньо до кафедри."
+		if lang == domain.LangEn {
+			fallbackText = "Unfortunately, I couldn't find an answer to this question in my documents. Please try rephrasing or contact the department directly."
+		}
+		fallbackText = strings.ReplaceAll(fallbackText, "\n", "\\n")
+		fmt.Fprintf(w, "data: %s\n\n", fallbackText)
+		if f, ok := w.(interface{ Flush() }); ok {
+			f.Flush()
 		}
 	}
 

@@ -13,9 +13,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/parser"
+	"university-chatbot/backend/internal/infrastructure/sqlite"
 )
 
 // IndexHandler handles document indexing for the admin CLI / seeding.
@@ -23,11 +26,12 @@ type IndexHandler struct {
 	vectorStore  domain.VectorStore
 	chunker      *chunker.Chunker
 	pdfExtractor *parser.PDFExtractor
+	jobsRepo     *sqlite.JobRepository
 }
 
 // NewIndexHandler constructs the handler.
-func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor) *IndexHandler {
-	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe}
+func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor, jobs *sqlite.JobRepository) *IndexHandler {
+	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe, jobsRepo: jobs}
 }
 
 // IndexDocumentsFromDir reads all supported files from dir and indexes them into Qdrant.
@@ -54,7 +58,6 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 
 		path := filepath.Join(dir, entry.Name())
 
-		// Extract text based on file type
 		var text string
 		var extractErr error
 
@@ -77,12 +80,10 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 			continue
 		}
 
-		// Generate deterministic document ID
 		docIDRaw := fmt.Sprintf("%s_%s", entry.Name(), time.Now().Format("2006-01-02"))
 		docIDHash := sha256.Sum256([]byte(docIDRaw))
 		docID := fmt.Sprintf("%x", docIDHash[:8])
 
-		// Detect language from filename: *_en.* → en, else uk
 		lang := "uk"
 		nameWithoutExt := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
 		if strings.HasSuffix(strings.ToLower(nameWithoutExt), "_en") {
@@ -91,7 +92,7 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 
 		chunks := h.chunker.Chunk(docID, entry.Name(), "document", lang, text)
 		if len(chunks) == 0 {
-			log.Printf("  [skip] %s — no chunks extracted (text too short?)", entry.Name())
+			log.Printf("  [skip] %s — no chunks extracted", entry.Name())
 			skipped++
 			continue
 		}
@@ -110,86 +111,138 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 	return nil
 }
 
-// AdminUploadHandler handles POST /admin/documents/upload
-func AdminUploadHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor) http.HandlerFunc {
-	ih := &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe}
-	return func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseMultipartForm(50 << 20); err != nil {
-			jsonError(w, "invalid_form", "Cannot parse multipart form", http.StatusBadRequest)
-			return
-		}
-
-		file, header, err := r.FormFile("file")
-		if err != nil {
-			jsonError(w, "missing_file", "No file in request", http.StatusBadRequest)
-			return
-		}
-		defer file.Close()
-
-		// Validate extension
-		if !parser.IsSupported(header.Filename) {
-			jsonError(w, "invalid_type",
-				fmt.Sprintf("Unsupported format. Supported: %s", supportedExtList()),
-				http.StatusBadRequest)
-			return
-		}
-
-		data, err := io.ReadAll(file)
-		if err != nil {
-			jsonError(w, "read_error", "Cannot read file", http.StatusInternalServerError)
-			return
-		}
-
-		// For uploaded files, save to temp and parse
-		ext := strings.ToLower(filepath.Ext(header.Filename))
-		var text string
-
-		if ext == ".txt" {
-			text = string(data)
-		} else {
-			// Save to temp file for parser
-			tmpFile, err := os.CreateTemp("", "upload-*"+ext)
-			if err != nil {
-				jsonError(w, "temp_error", "Cannot create temp file", http.StatusInternalServerError)
-				return
-			}
-			defer os.Remove(tmpFile.Name())
-			defer tmpFile.Close()
-
-			if _, err := tmpFile.Write(data); err != nil {
-				jsonError(w, "write_error", "Cannot write temp file", http.StatusInternalServerError)
-				return
-			}
-			tmpFile.Close()
-
-			if ext == ".pdf" {
-				text, err = ih.pdfExtractor.ExtractText(r.Context(), tmpFile.Name())
-			} else {
-				text, err = parser.ExtractText(tmpFile.Name())
-			}
-			if err != nil {
-				jsonError(w, "parse_error", fmt.Sprintf("Cannot parse file: %v", err), http.StatusBadRequest)
-				return
-			}
-		}
-
-		docIDHash := sha256.Sum256([]byte(fmt.Sprintf("%s_%d", header.Filename, time.Now().UnixNano())))
-		docID := fmt.Sprintf("%x", docIDHash[:8])
-		chunks := ih.chunker.Chunk(docID, header.Filename, "document", "uk", text)
-
-		if err := vs.UpsertChunks(r.Context(), chunks); err != nil {
-			jsonError(w, "index_error", "Failed to index document", http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"status":      "indexed",
-			"filename":    header.Filename,
-			"chunk_count": len(chunks),
-			"chars":       len(text),
-		})
+// HandleAdminUpload handles POST /admin/documents/upload asynchronously.
+func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		jsonError(w, "invalid_form", "Cannot parse multipart form", http.StatusBadRequest)
+		return
 	}
+
+	file, header, err := r.FormFile("file")
+	if err != nil {
+		jsonError(w, "missing_file", "No file in request", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+
+	if !parser.IsSupported(header.Filename) {
+		jsonError(w, "invalid_type", fmt.Sprintf("Unsupported format. Supported: %s", supportedExtList()), http.StatusBadRequest)
+		return
+	}
+
+	data, err := io.ReadAll(file)
+	if err != nil {
+		jsonError(w, "read_error", "Cannot read file", http.StatusInternalServerError)
+		return
+	}
+
+	// Create job record
+	jobIDHash := sha256.Sum256([]byte(fmt.Sprintf("%s_%d", header.Filename, time.Now().UnixNano())))
+	jobID := fmt.Sprintf("%x", jobIDHash[:8])
+
+	job := &domain.UploadJob{
+		ID:       jobID,
+		Filename: header.Filename,
+		Status:   domain.JobStatusPending,
+	}
+
+	if err := h.jobsRepo.CreateJob(r.Context(), job); err != nil {
+		jsonError(w, "db_error", "Cannot create job record", http.StatusInternalServerError)
+		return
+	}
+
+	// Save to temp file for the background worker
+	ext := strings.ToLower(filepath.Ext(header.Filename))
+	tmpFile, err := os.CreateTemp("", "upload-"+jobID+"-*"+ext)
+	if err != nil {
+		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
+		jsonError(w, "temp_error", "Cannot create temp file", http.StatusInternalServerError)
+		return
+	}
+	defer tmpFile.Close()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
+		jsonError(w, "write_error", "Cannot write temp file", http.StatusInternalServerError)
+		return
+	}
+
+	filepath := tmpFile.Name()
+
+	// Spin background worker
+	go h.processBackgroundUpload(jobID, header.Filename, filepath)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted) // 202 Accepted
+	json.NewEncoder(w).Encode(map[string]string{
+		"status": "accepted",
+		"job_id": jobID,
+	})
+}
+
+func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath string) {
+	ctx := context.Background()
+	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
+	
+	// Ensure file cleanup after processing
+	defer os.Remove(filepath)
+
+	var text string
+	var err error
+
+	ext := strings.ToLower(filepath[strings.LastIndex(filepath, "."):])
+	if ext == ".txt" {
+		data, readErr := os.ReadFile(filepath)
+		if readErr != nil {
+			err = readErr
+		} else {
+			text = string(data)
+		}
+	} else if ext == ".pdf" {
+		text, err = h.pdfExtractor.ExtractText(ctx, filepath)
+	} else {
+		text, err = parser.ExtractText(filepath)
+	}
+
+	if err != nil {
+		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("extraction error: %w", err))
+		return
+	}
+
+	chunks := h.chunker.Chunk(jobID, originalFilename, "document", "uk", text)
+	if len(chunks) == 0 {
+		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("no chunks extracted, file might be empty"))
+		return
+	}
+
+	if err := h.vectorStore.UpsertChunks(ctx, chunks); err != nil {
+		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("qdrant error: %w", err))
+		return
+	}
+
+	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusCompleted, nil)
+}
+
+// GetJobStatus handles GET /admin/documents/jobs/{job_id}
+func (h *IndexHandler) GetJobStatus(w http.ResponseWriter, r *http.Request) {
+	jobID := chi.URLParam(r, "job_id")
+	if jobID == "" {
+		jsonError(w, "missing_job_id", "job_id missing in URL", http.StatusBadRequest)
+		return
+	}
+
+	job, err := h.jobsRepo.GetJob(r.Context(), jobID)
+	if err == sqlite.ErrJobNotFound {
+		jsonError(w, "not_found", "job not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		jsonError(w, "db_error", "database error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(job)
 }
 
 func supportedExtList() string {

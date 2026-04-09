@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"strings"
-	"time"
 
 	"university-chatbot/backend/internal/application/features/chat/commands"
 	"university-chatbot/backend/internal/application/features/chat/queries"
@@ -16,37 +16,40 @@ import (
 	"university-chatbot/backend/internal/infrastructure/security"
 )
 
+// AskBotUseCase defines the interface for RAG chat processing.
+type AskBotUseCase interface {
+	Handle(ctx context.Context, q queries.AskBotQuery, w io.Writer) (*queries.AskBotResult, error)
+}
+
 // ChatHandler handles chat-related HTTP endpoints.
 type ChatHandler struct {
-	askBot       *queries.AskBotHandler
-	feedback     *commands.SubmitFeedbackHandler
-	rateLimiter  *security.RateLimiter
-	offTopic     *security.OffTopicFilter
-	validator    *validators.AskBotValidator
+	askBot    AskBotUseCase
+	feedback  *commands.SubmitFeedbackHandler
+	rateBan   func(ip string) // Functional injection for ban capability
+	offTopic  *security.OffTopicFilter
+	validator *validators.AskBotValidator
 }
 
 // NewChatHandler constructs the handler.
 func NewChatHandler(
-	askBot *queries.AskBotHandler,
+	askBot AskBotUseCase,
 	feedback *commands.SubmitFeedbackHandler,
-	rl *security.RateLimiter,
+	banFunc func(ip string),
 	otf *security.OffTopicFilter,
 ) *ChatHandler {
 	return &ChatHandler{
-		askBot:      askBot,
-		feedback:    feedback,
-		rateLimiter: rl,
-		offTopic:    otf,
-		validator:   &validators.AskBotValidator{},
+		askBot:    askBot,
+		feedback:  feedback,
+		rateBan:   banFunc,
+		offTopic:  otf,
+		validator: validators.NewAskBotValidator(),
 	}
 }
 
 // ─── POST /api/v1/chat/stream ─────────────────────────────────────────────────
-// This endpoint handles both initiating the chat and streaming the response.
-// It uses SSE (Server-Sent Events) protocol.
 
 func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
-	// --- SSE headers ---
+	// 1. Setup SSE headers and Flusher
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
@@ -58,43 +61,27 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// --- Parse request body ---
+	// 2. Parse and Validate Request
 	var req domain.ChatRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		sseError(w, flusher, "invalid_request", "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	// --- Validate input ---
 	if err := h.validator.Validate(&req); err != nil {
 		sseError(w, flusher, "validation_error", err.Error(), http.StatusBadRequest)
 		return
 	}
 
-	// --- Rate limiting ---
-	ip := realIP(r)
-	allowed, retryAfter := h.rateLimiter.Allow(ip, 1)
-	if !allowed {
-		secs := int(retryAfter.Seconds())
-		msg := fmt.Sprintf("Ви надіслали забагато запитань. Зачекайте %d сек.", secs)
-		if req.Language == domain.LangEn {
-			msg = fmt.Sprintf("You have sent too many requests. Please wait %d seconds.", secs)
-		}
-		sseError(w, flusher, "rate_limit_exceeded", msg, http.StatusTooManyRequests)
-		return
-	}
-
-	// --- Off-topic filter (Stage 1: keyword-based, zero latency) ---
+	// 3. Off-topic filter with side-effect (Ban/Penalty)
 	if h.offTopic.IsOffTopic(req.Message) {
-		// Apply penalty: this counts as 3 normal requests
-		h.rateLimiter.Allow(ip, 2) // +2 more on top of the 1 already consumed
+		h.rateBan(realIP(r)) // Apply penalty ban 
 
 		offTopicMsg := security.OffTopicResponseUA
 		if req.Language == domain.LangEn {
 			offTopicMsg = security.OffTopicResponseEN
 		}
 
-		// Stream it as a normal response so the UI renders it smoothly
 		writeSSEToken(w, flusher, offTopicMsg)
 		writeSources(w, flusher, nil)
 		fmt.Fprintf(w, "data: [DONE]\n\n")
@@ -102,35 +89,37 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-	defer cancel()
+	// 4. Execute RAG pipeline
+	ctx := r.Context()
 
-	// --- Execute RAG pipeline with streaming ---
 	result, err := h.askBot.Handle(ctx, queries.AskBotQuery{Request: &req}, &sseWriter{w: w, flusher: flusher})
 	if err != nil {
 		log.Printf("[ERROR] RAG pipeline: %v", err)
-		
-		msg := "Failed to generate response. Please try again."
-		if req.Language == domain.LangUk {
-			msg = "Не вдалося згенерувати відповідь. Будь ласка, спробуйте ще раз."
-		}
-		
-		if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "429") {
-			if req.Language == domain.LangUk {
-				msg = "Сервери штучного інтелекту зараз перевантажені. Зачекайте хвилинку і спробуйте знову."
-			} else {
-				msg = "AI servers are currently overloaded. Please wait a moment and try again."
-			}
-		}
-		
-		sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
+		h.handleRAGError(err, &req, w, flusher)
 		return
 	}
 
-	// --- Send sources after the answer ---
+	// 5. Send final sources
 	writeSources(w, flusher, result.Sources)
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
+}
+
+func (h *ChatHandler) handleRAGError(err error, req *domain.ChatRequest, w http.ResponseWriter, flusher http.Flusher) {
+	msg := "Failed to generate response. Please try again."
+	if req.Language == domain.LangUk {
+		msg = "Не вдалося згенерувати відповідь. Будь ласка, спробуйте ще раз."
+	}
+	
+	if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "429") {
+		if req.Language == domain.LangUk {
+			msg = "Сервери штучного інтелекту зараз перевантажені. Зачекайте хвилинку і спробуйте знову."
+		} else {
+			msg = "AI servers are currently overloaded. Please wait a moment and try again."
+		}
+	}
+	
+	sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
 }
 
 // ─── POST /api/v1/feedback ────────────────────────────────────────────────────
@@ -165,14 +154,12 @@ func (sw *sseWriter) Write(p []byte) (n int, err error) {
 	return
 }
 
-// writeSSEToken sends a single text token as an SSE data event.
 func writeSSEToken(w http.ResponseWriter, f http.Flusher, token string) {
 	token = strings.ReplaceAll(token, "\n", "\\n")
 	fmt.Fprintf(w, "data: %s\n\n", token)
 	f.Flush()
 }
 
-// writeSources sends sources as a JSON SSE event.
 func writeSources(w http.ResponseWriter, f http.Flusher, sources []domain.Source) {
 	if sources == nil {
 		sources = []domain.Source{}
@@ -182,7 +169,6 @@ func writeSources(w http.ResponseWriter, f http.Flusher, sources []domain.Source
 	f.Flush()
 }
 
-// sseError sends an error as an SSE event and stops the stream.
 func sseError(w http.ResponseWriter, f http.Flusher, code, msg string, status int) {
 	w.WriteHeader(status)
 	b, _ := json.Marshal(map[string]string{"error": code, "message": msg})
@@ -190,14 +176,12 @@ func sseError(w http.ResponseWriter, f http.Flusher, code, msg string, status in
 	f.Flush()
 }
 
-// jsonError writes a standard JSON error response.
 func jsonError(w http.ResponseWriter, code, msg string, status int) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": code, "message": msg})
 }
 
-// realIP extracts the real client IP, respecting X-Real-IP/X-Forwarded-For headers.
 func realIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Real-IP"); ip != "" {
 		return ip
@@ -205,7 +189,6 @@ func realIP(r *http.Request) string {
 	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
 		return strings.SplitN(ip, ",", 2)[0]
 	}
-	// Strip port from RemoteAddr
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx > 0 {
 		return addr[:idx]

@@ -56,17 +56,23 @@ func main() {
 	}
 	log.Println("Qdrant collection ready")
 
-	// ── Infrastructure: SQLite analytics ──────────────────────────────────────
-	log.Println("Opening SQLite analytics DB...")
+	// ── Infrastructure: SQLite DB ──────────────────────────────────────────────
+	log.Println("Opening SQLite DB...")
 	if err := os.MkdirAll(extractDir(cfg.DBPath), 0755); err != nil {
 		log.Fatalf("Create DB dir: %v", err)
 	}
-	analyticsRepo, err := sqlite.NewAnalyticsRepo(cfg.DBPath)
+	db, err := sqlite.InitDB(cfg.DBPath)
 	if err != nil {
 		log.Fatalf("SQLite init: %v", err)
 	}
-	defer analyticsRepo.Close()
+	defer db.Close()
 	log.Println("SQLite ready at", cfg.DBPath)
+
+	analyticsRepo, err := sqlite.NewAnalyticsRepo(db)
+	if err != nil {
+		log.Fatalf("SQLite analytics repo init: %v", err)
+	}
+	jobsRepo := sqlite.NewJobRepository(db)
 
 	// ── Infrastructure: Security ───────────────────────────────────────────────
 	// 10 requests per 5 minutes, spam penalty = 3x
@@ -80,7 +86,7 @@ func main() {
 	// ── If --index flag is provided: index documents and exit ──────────────────
 	if *indexDir != "" {
 		log.Printf("Indexing documents from %q ...", *indexDir)
-		ih := chathttp.NewIndexHandler(qdrantClient, chunkr, pdfExtractor)
+		ih := chathttp.NewIndexHandler(qdrantClient, chunkr, pdfExtractor, jobsRepo)
 		if err := ih.IndexDocumentsFromDir(ctx, *indexDir); err != nil {
 			log.Fatalf("Indexing failed: %v", err)
 		}
@@ -93,8 +99,8 @@ func main() {
 	feedbackHandler := commands.NewSubmitFeedbackHandler(analyticsRepo)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
-	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter, offTopicFilter)
-	router := chathttp.NewRouter(chatHttp, qdrantClient, chunkr, pdfExtractor, cfg.AllowedOrigins)
+	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter)
+	router := chathttp.NewRouter(chatHttp, qdrantClient, chunkr, pdfExtractor, jobsRepo, rateLimiter, cfg.AllowedOrigins)
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%s", cfg.Port)

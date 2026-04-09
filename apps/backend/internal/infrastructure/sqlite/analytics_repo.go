@@ -6,11 +6,10 @@ import (
 	"fmt"
 	"time"
 
-	_ "modernc.org/sqlite"
 	"university-chatbot/backend/internal/domain"
 )
 
-const schema = `
+const analyticsSchema = `
 CREATE TABLE IF NOT EXISTS queries (
 	id          INTEGER PRIMARY KEY AUTOINCREMENT,
 	query_hash  TEXT    NOT NULL,
@@ -32,27 +31,14 @@ type AnalyticsRepo struct {
 	db *sql.DB
 }
 
-// NewAnalyticsRepo opens (or creates) the SQLite database and runs migrations.
-func NewAnalyticsRepo(dbPath string) (*AnalyticsRepo, error) {
-	db, err := sql.Open("sqlite", dbPath)
-	if err != nil {
-		return nil, fmt.Errorf("sqlite: open %q: %w", dbPath, err)
-	}
-
-	// SQLite is single-writer: use WAL mode for better concurrency.
-	if _, err := db.Exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;`); err != nil {
-		return nil, fmt.Errorf("sqlite: pragma: %w", err)
-	}
-
-	if _, err := db.Exec(schema); err != nil {
-		return nil, fmt.Errorf("sqlite: migrate: %w", err)
+// NewAnalyticsRepo creates the analytics repo and runs migrations.
+func NewAnalyticsRepo(db *sql.DB) (*AnalyticsRepo, error) {
+	if _, err := db.Exec(analyticsSchema); err != nil {
+		return nil, fmt.Errorf("sqlite: migrate analytics: %w", err)
 	}
 
 	return &AnalyticsRepo{db: db}, nil
 }
-
-// Close closes the underlying DB connection.
-func (r *AnalyticsRepo) Close() error { return r.db.Close() }
 
 // Record persists a completed query event.
 func (r *AnalyticsRepo) Record(ctx context.Context, rec domain.QueryRecord) error {

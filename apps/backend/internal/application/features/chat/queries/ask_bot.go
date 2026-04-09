@@ -55,14 +55,13 @@ func NewAskBotHandler(vs domain.VectorStore, llm domain.LLMClient, ar domain.Ana
 }
 
 // Handle executes the RAG pipeline and streams tokens to w.
-// It also records an analytics entry when done.
 func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) (*AskBotResult, error) {
 	start := time.Now()
 	req := q.Request
 
 	// --- 1. Build query hash for analytics (no PII stored) ---
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.Message)))
-	queryHash := fmt.Sprintf("%x", hash[:8]) // short: first 8 bytes
+	queryHash := fmt.Sprintf("%x", hash[:8])
 
 	// --- 2. Hybrid search for relevant context ---
 	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 5)
@@ -70,26 +69,21 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
-	// --- 3. Build context string from top chunks ---
+	// --- 3. Build context string from top chunks (O(1) deduplication) ---
 	var contextBuf bytes.Buffer
 	sources := make([]domain.Source, 0, len(results))
+	seenDocs := make(map[string]bool)
 
-	for i, r := range results {
+	for _, r := range results {
 		if r.Score < 0.5 {
 			continue
 		}
+		
 		fmt.Fprintf(&contextBuf, "--- Документ: %s (стор. %d) ---\n%s\n\n",
 			r.Chunk.DocumentName, r.Chunk.PageNumber, r.Chunk.Text)
 
-		// Deduplicate sources by document name
-		found := false
-		for _, s := range sources {
-			if s.DocumentName == r.Chunk.DocumentName {
-				found = true
-				break
-			}
-		}
-		if !found && i < 5 {
+		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 5 {
+			seenDocs[r.Chunk.DocumentName] = true
 			sources = append(sources, domain.Source{
 				DocumentName: r.Chunk.DocumentName,
 				Score:        r.Score,
@@ -111,15 +105,18 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 
 	elapsed := time.Since(start).Milliseconds()
 
-	// --- 6. Record analytics (best-effort, non-blocking) ---
-	rec := domain.QueryRecord{
-		QueryHash:  queryHash,
-		Language:   req.Language,
-		ResponseMs: elapsed,
-		SourcesCnt: len(sources),
-		IsBlocked:  false,
-	}
-	_ = h.analytics.Record(context.Background(), rec)
+	// --- 6. Record analytics in background ---
+	go func() {
+		// Use a detached context so cancellation of the HTTP request doesn't abort the DB insert
+		rec := domain.QueryRecord{
+			QueryHash:  queryHash,
+			Language:   req.Language,
+			ResponseMs: elapsed,
+			SourcesCnt: len(sources),
+			IsBlocked:  false,
+		}
+		_ = h.analytics.Record(context.Background(), rec)
+	}()
 
 	return &AskBotResult{
 		Sources:   sources,

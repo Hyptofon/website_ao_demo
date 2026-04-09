@@ -41,11 +41,31 @@ type Source struct {
 	PageNumber   int     `json:"page_number,omitempty"`
 }
 
+// JobStatus represents the state of a background job.
+type JobStatus string
+
+const (
+	JobStatusPending    JobStatus = "pending"
+	JobStatusProcessing JobStatus = "processing"
+	JobStatusCompleted  JobStatus = "completed"
+	JobStatusFailed     JobStatus = "failed"
+)
+
+// UploadJob represents an async job to extract and index a document.
+type UploadJob struct {
+	ID        string    `json:"id"`
+	Filename  string    `json:"filename"`
+	Status    JobStatus `json:"status"`
+	Error     string    `json:"error,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
 // ChatRequest is the inbound DTO from the HTTP layer.
 type ChatRequest struct {
-	SessionID string   `json:"session_id"`
-	Message   string   `json:"message"`
-	Language  Language `json:"language"`
+	SessionID string   `json:"session_id" validate:"required"`
+	Message   string   `json:"message" validate:"required,max=500"`
+	Language  Language `json:"language" validate:"required,oneof=uk en"`
 }
 
 // QueryRecord is the analytics row persisted to SQLite.

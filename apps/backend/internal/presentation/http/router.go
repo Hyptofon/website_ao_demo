@@ -1,11 +1,14 @@
 package http
 
 import (
+	"crypto/subtle"
+	"database/sql"
 	"encoding/json"
 	"net/http"
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
+	"university-chatbot/backend/internal/infrastructure/gemini"
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/security"
 	"university-chatbot/backend/internal/infrastructure/sqlite"
@@ -21,13 +24,17 @@ func NewRouter(
 	c *chunker.Chunker,
 	pe *parser.PDFExtractor,
 	jobsRepo *sqlite.JobRepository,
+	me *gemini.MetadataExtractor,
 	rateLimiter *security.RateLimiter,
+	adminToken string,
 	allowedOrigins []string,
+	db *sql.DB,
 ) *chi.Mux {
 	r := chi.NewRouter()
 
 	// ── Global middleware ──────────────────────────────────────────────────────
 	r.Use(middleware.RealIP)
+	r.Use(middleware.RequestID) // Pattern #4: Request ID tracing
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CleanPath)
@@ -35,15 +42,36 @@ func NewRouter(
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   allowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept"},
+		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept", "X-Admin-Token"},
 		AllowCredentials: false,
 		MaxAge:           3600,
 	}))
 
-	// ── Health check ───────────────────────────────────────────────────────────
+	// ── Deep Healthcheck (Pattern #6) ──────────────────────────────────────────
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		checks := map[string]string{"api": "ok"}
+
+		// SQLite ping
+		if db != nil {
+			if err := db.PingContext(r.Context()); err != nil {
+				checks["sqlite"] = "error: " + err.Error()
+			} else {
+				checks["sqlite"] = "ok"
+			}
+		}
+
+		// Determine overall status
+		status := http.StatusOK
+		for _, v := range checks {
+			if v != "ok" {
+				status = http.StatusServiceUnavailable
+				break
+			}
+		}
+
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(checks)
 	})
 
 	// ── Public Chat API ────────────────────────────────────────────────────────
@@ -53,13 +81,36 @@ func NewRouter(
 		r.Post("/feedback", chatHandler.SubmitFeedback)
 	})
 
-	indexHandler := NewIndexHandler(vs, c, pe, jobsRepo)
+	indexHandler := NewIndexHandler(vs, c, pe, jobsRepo, me)
 
-	// ── Admin (Phase 1: no OAuth, just a shared secret header) ────────────────
+	// ── Admin (Pattern #5: Shared secret auth) ────────────────────────────────
 	r.Route("/admin", func(r chi.Router) {
+		if adminToken != "" {
+			r.Use(AdminAuthMiddleware(adminToken))
+		}
 		r.Post("/documents/upload", indexHandler.HandleAdminUpload)
 		r.Get("/documents/jobs/{job_id}", indexHandler.GetJobStatus)
+		r.Delete("/documents/{document_id}", indexHandler.HandleDeleteDocument)
 	})
 
 	return r
+}
+
+// AdminAuthMiddleware validates the X-Admin-Token header against a shared secret.
+// Uses constant-time comparison to prevent timing attacks.
+func AdminAuthMiddleware(secret string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			token := r.Header.Get("X-Admin-Token")
+			if token == "" {
+				jsonError(w, "unauthorized", "Missing X-Admin-Token header", http.StatusUnauthorized)
+				return
+			}
+			if subtle.ConstantTimeCompare([]byte(token), []byte(secret)) != 1 {
+				jsonError(w, "unauthorized", "Invalid admin token", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }

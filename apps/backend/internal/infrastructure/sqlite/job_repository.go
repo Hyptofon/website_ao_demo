@@ -24,13 +24,14 @@ func NewJobRepository(db *sql.DB) *JobRepository {
 
 // CreateJob inserts a new job record.
 func (r *JobRepository) CreateJob(ctx context.Context, job *domain.UploadJob) error {
-	query := `INSERT INTO upload_jobs (id, filename, status, error, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`
-	
+	query := `INSERT INTO upload_jobs (id, filename, status, error, progress, current_step, chunks_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
 	now := time.Now().UTC()
 	job.CreatedAt = now
 	job.UpdatedAt = now
 
-	_, err := r.db.ExecContext(ctx, query, job.ID, job.Filename, job.Status, job.Error, job.CreatedAt, job.UpdatedAt)
+	_, err := r.db.ExecContext(ctx, query, job.ID, job.Filename, job.Status, job.Error,
+		job.Progress, job.CurrentStep, job.ChunksCount, job.CreatedAt, job.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create job: %w", err)
 	}
@@ -45,10 +46,16 @@ func (r *JobRepository) UpdateJobStatus(ctx context.Context, id string, status d
 		errStr = &s
 	}
 
-	query := `UPDATE upload_jobs SET status = ?, error = ?, updated_at = ? WHERE id = ?`
+	// When completing or failing, set progress to 100 or keep current
+	progress := 0
+	if status == domain.JobStatusCompleted {
+		progress = 100
+	}
+
+	query := `UPDATE upload_jobs SET status = ?, error = ?, progress = CASE WHEN ? > 0 THEN ? ELSE progress END, updated_at = ? WHERE id = ?`
 	now := time.Now().UTC()
 
-	res, err := r.db.ExecContext(ctx, query, status, errStr, now, id)
+	res, err := r.db.ExecContext(ctx, query, status, errStr, progress, progress, now, id)
 	if err != nil {
 		return fmt.Errorf("update job: %w", err)
 	}
@@ -60,10 +67,37 @@ func (r *JobRepository) UpdateJobStatus(ctx context.Context, id string, status d
 	return nil
 }
 
-// GetJob retrieves a job by ID.
+// UpdateProgress updates the progress percentage and current step description.
+// Inspired by python_service-dev/worker.py publish_callback pattern.
+func (r *JobRepository) UpdateProgress(ctx context.Context, id string, progress int, step string) error {
+	query := `UPDATE upload_jobs SET progress = ?, current_step = ?, updated_at = ? WHERE id = ?`
+	now := time.Now().UTC()
+
+	res, err := r.db.ExecContext(ctx, query, progress, step, now, id)
+	if err != nil {
+		return fmt.Errorf("update progress: %w", err)
+	}
+
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return ErrJobNotFound
+	}
+	return nil
+}
+
+// UpdateChunksCount sets the final chunks_count after indexing is complete.
+func (r *JobRepository) UpdateChunksCount(ctx context.Context, id string, count int) error {
+	query := `UPDATE upload_jobs SET chunks_count = ?, updated_at = ? WHERE id = ?`
+	now := time.Now().UTC()
+
+	_, err := r.db.ExecContext(ctx, query, count, now, id)
+	return err
+}
+
+// GetJob retrieves a job by ID. Now includes progress tracking fields.
 func (r *JobRepository) GetJob(ctx context.Context, id string) (*domain.UploadJob, error) {
-	query := `SELECT filename, status, error, created_at, updated_at FROM upload_jobs WHERE id = ?`
-	
+	query := `SELECT filename, status, error, progress, current_step, chunks_count, created_at, updated_at FROM upload_jobs WHERE id = ?`
+
 	var job domain.UploadJob
 	job.ID = id
 	var errStr sql.NullString
@@ -72,6 +106,9 @@ func (r *JobRepository) GetJob(ctx context.Context, id string) (*domain.UploadJo
 		&job.Filename,
 		&job.Status,
 		&errStr,
+		&job.Progress,
+		&job.CurrentStep,
+		&job.ChunksCount,
 		&job.CreatedAt,
 		&job.UpdatedAt,
 	)

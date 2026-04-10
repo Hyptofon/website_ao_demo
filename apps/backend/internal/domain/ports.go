@@ -32,6 +32,11 @@ type LLMClient interface {
 	// StreamAnswer sends the prompt to the LLM and streams tokens to the writer.
 	// It closes the writer when done or on error.
 	StreamAnswer(ctx context.Context, systemPrompt, userQuery, context string, lang Language, w io.Writer) error
+
+	// GenerateJSON sends a prompt and unmarshals the JSON response into result.
+	// Uses Gemini JSON mode (response_mime_type: application/json) for reliable structured output.
+	// Inspired by python_service-dev LLMProvider.generate_structured() protocol.
+	GenerateJSON(ctx context.Context, prompt string, result any) error
 }
 
 // AnalyticsRepo is the port for recording and querying analytics (SQLite).

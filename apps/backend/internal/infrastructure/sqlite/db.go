@@ -41,6 +41,9 @@ func migrate(db *sql.DB) error {
 		filename TEXT NOT NULL,
 		status TEXT NOT NULL,
 		error TEXT,
+		progress INTEGER NOT NULL DEFAULT 0,
+		current_step TEXT NOT NULL DEFAULT '',
+		chunks_count INTEGER NOT NULL DEFAULT 0,
 		created_at DATETIME NOT NULL,
 		updated_at DATETIME NOT NULL
 	);

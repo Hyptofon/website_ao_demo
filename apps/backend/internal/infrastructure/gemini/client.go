@@ -8,12 +8,17 @@ import (
 
 	"google.golang.org/genai"
 	"university-chatbot/backend/internal/domain"
+	"university-chatbot/backend/internal/infrastructure/utils"
 )
 
 const (
 	modelGenerate = "gemini-2.5-flash"
 	modelEmbed    = "gemini-embedding-001"
 	maxConcurrent = 50
+
+	// Temperature for factual RAG answers (low = more deterministic).
+	// Inspired by python_service-dev temp_code=0.3, but even lower for factual Q&A.
+	temperatureChat = 0.2
 )
 
 // Client wraps the google.golang.org/genai SDK with a concurrency semaphore.
@@ -48,22 +53,27 @@ func (c *Client) RawClient() *genai.Client {
 }
 
 // Embed returns a vector for the given text using text-embedding-004.
+// Wrapped with retry logic for transient API errors (503, 429).
 func (c *Client) Embed(ctx context.Context, text string) ([]float32, error) {
 	c.semaphore <- struct{}{}
 	defer func() { <-c.semaphore }()
 
-	contents := []*genai.Content{genai.NewContentFromText(text, genai.RoleUser)}
-	res, err := c.client.Models.EmbedContent(ctx, modelEmbed, contents, nil)
-	if err != nil {
-		return nil, fmt.Errorf("gemini: embed: %w", err)
-	}
-	if len(res.Embeddings) == 0 {
-		return nil, fmt.Errorf("gemini: embed: no embeddings returned")
-	}
-	return res.Embeddings[0].Values, nil
+	return withRetry(ctx, "gemini-embed", defaultMaxRetries, func() ([]float32, error) {
+		contents := []*genai.Content{genai.NewContentFromText(text, genai.RoleUser)}
+		res, err := c.client.Models.EmbedContent(ctx, modelEmbed, contents, nil)
+		if err != nil {
+			return nil, fmt.Errorf("gemini: embed: %w", err)
+		}
+		if len(res.Embeddings) == 0 {
+			return nil, fmt.Errorf("gemini: embed: no embeddings returned")
+		}
+		return res.Embeddings[0].Values, nil
+	})
 }
 
 // StreamAnswer streams a Gemini response token-by-token to w using SSE format.
+// Note: streaming cannot be retried mid-stream. The retry wraps the entire stream
+// attempt — if a transient error occurs before any tokens are emitted, it retries.
 func (c *Client) StreamAnswer(
 	ctx context.Context,
 	systemPrompt, userQuery, docContext string,
@@ -82,11 +92,11 @@ func (c *Client) StreamAnswer(
 	}
 	promptBuilder.WriteString(userQuery)
 
-	// No longer using thinkingLevelVal
-
+	temp := float32(temperatureChat)
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
 		MaxOutputTokens:   1536,
+		Temperature:       &temp,
 	}
 
 	var textEmitted bool
@@ -103,11 +113,8 @@ func (c *Client) StreamAnswer(
 		if resp == nil {
 			continue
 		}
-		
-		// TEST LOG: what is inside resp?
-		fmt.Printf("DEBUG RESP: %+v, Text: %v\n", resp, resp.Text)
 
-			for _, cand := range resp.Candidates {
+		for _, cand := range resp.Candidates {
 			if cand.Content == nil {
 				continue
 			}
@@ -125,9 +132,9 @@ func (c *Client) StreamAnswer(
 	}
 
 	if !textEmitted {
-		fallbackText := "На жаль, я не знайшов відповіді на це запитання у своїх документах. Можливо, варто перефразувати запит або звернутися безпосередньо до кафедри."
+		fallbackText := domain.FallbackResponseUA
 		if lang == domain.LangEn {
-			fallbackText = "Unfortunately, I couldn't find an answer to this question in my documents. Please try rephrasing or contact the department directly."
+			fallbackText = domain.FallbackResponseEN
 		}
 		fallbackText = strings.ReplaceAll(fallbackText, "\n", "\\n")
 		fmt.Fprintf(w, "data: %s\n\n", fallbackText)
@@ -142,4 +149,45 @@ func (c *Client) StreamAnswer(
 		f.Flush()
 	}
 	return nil
+}
+
+// GenerateJSON sends a prompt to Gemini in JSON mode and unmarshals the response into result.
+// Uses retry logic and JSON sanitization for maximum reliability.
+func (c *Client) GenerateJSON(ctx context.Context, prompt string, result any) error {
+	c.semaphore <- struct{}{}
+	defer func() { <-c.semaphore }()
+
+	resp, err := withRetry(ctx, "gemini-json", defaultMaxRetries, func() (*genai.GenerateContentResponse, error) {
+		return c.client.Models.GenerateContent(
+			ctx,
+			modelGenerate,
+			[]*genai.Content{genai.NewContentFromText(prompt, genai.RoleUser)},
+			&genai.GenerateContentConfig{
+				MaxOutputTokens:  4096,
+				ResponseMIMEType: "application/json",
+			},
+		)
+	})
+	if err != nil {
+		return fmt.Errorf("gemini json generate: %w", err)
+	}
+
+	// Extract text from response
+	var rawJSON strings.Builder
+	for _, cand := range resp.Candidates {
+		if cand.Content == nil {
+			continue
+		}
+		for _, part := range cand.Content.Parts {
+			if part.Text != "" {
+				rawJSON.WriteString(part.Text)
+			}
+		}
+	}
+
+	if rawJSON.Len() == 0 {
+		return fmt.Errorf("gemini returned empty JSON response")
+	}
+
+	return utils.SafeJSONUnmarshal([]byte(rawJSON.String()), result)
 }

@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
+
+	"github.com/go-chi/chi/v5/middleware"
 
 	"university-chatbot/backend/internal/application/features/chat/commands"
 	"university-chatbot/backend/internal/application/features/chat/queries"
@@ -49,6 +51,8 @@ func NewChatHandler(
 // ─── POST /api/v1/chat/stream ─────────────────────────────────────────────────
 
 func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
+	reqID := middleware.GetReqID(r.Context())
+
 	// 1. Setup SSE headers and Flusher
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -77,9 +81,9 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 	if h.offTopic.IsOffTopic(req.Message) {
 		h.rateBan(realIP(r)) // Apply penalty ban 
 
-		offTopicMsg := security.OffTopicResponseUA
+		offTopicMsg := domain.OffTopicResponseUA
 		if req.Language == domain.LangEn {
-			offTopicMsg = security.OffTopicResponseEN
+			offTopicMsg = domain.OffTopicResponseEN
 		}
 
 		writeSSEToken(w, flusher, offTopicMsg)
@@ -94,7 +98,11 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.askBot.Handle(ctx, queries.AskBotQuery{Request: &req}, &sseWriter{w: w, flusher: flusher})
 	if err != nil {
-		log.Printf("[ERROR] RAG pipeline: %v", err)
+		slog.Error("RAG pipeline error",
+			"request_id", reqID,
+			"session_id", req.SessionID,
+			"error", err,
+		)
 		h.handleRAGError(err, &req, w, flusher)
 		return
 	}
@@ -106,19 +114,18 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *ChatHandler) handleRAGError(err error, req *domain.ChatRequest, w http.ResponseWriter, flusher http.Flusher) {
-	msg := "Failed to generate response. Please try again."
+	msg := domain.RAGErrorResponseEN
 	if req.Language == domain.LangUk {
-		msg = "Не вдалося згенерувати відповідь. Будь ласка, спробуйте ще раз."
+		msg = domain.RAGErrorResponseUA
 	}
-	
+
 	if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "429") {
+		msg = domain.OverloadResponseEN
 		if req.Language == domain.LangUk {
-			msg = "Сервери штучного інтелекту зараз перевантажені. Зачекайте хвилинку і спробуйте знову."
-		} else {
-			msg = "AI servers are currently overloaded. Please wait a moment and try again."
+			msg = domain.OverloadResponseUA
 		}
 	}
-	
+
 	sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
 }
 

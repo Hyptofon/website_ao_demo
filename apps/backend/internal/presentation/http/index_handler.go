@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -17,21 +18,23 @@ import (
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/chunker"
+	"university-chatbot/backend/internal/infrastructure/gemini"
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/sqlite"
 )
 
 // IndexHandler handles document indexing for the admin CLI / seeding.
 type IndexHandler struct {
-	vectorStore  domain.VectorStore
-	chunker      *chunker.Chunker
-	pdfExtractor *parser.PDFExtractor
-	jobsRepo     *sqlite.JobRepository
+	vectorStore   domain.VectorStore
+	chunker       *chunker.Chunker
+	pdfExtractor  *parser.PDFExtractor
+	jobsRepo      *sqlite.JobRepository
+	metaExtractor *gemini.MetadataExtractor
 }
 
 // NewIndexHandler constructs the handler.
-func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor, jobs *sqlite.JobRepository) *IndexHandler {
-	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe, jobsRepo: jobs}
+func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor, jobs *sqlite.JobRepository, me *gemini.MetadataExtractor) *IndexHandler {
+	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe, jobsRepo: jobs, metaExtractor: me}
 }
 
 // IndexDocumentsFromDir reads all supported files from dir and indexes them into Qdrant.
@@ -183,7 +186,8 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath string) {
 	ctx := context.Background()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
-	
+	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
+
 	// Ensure file cleanup after processing
 	defer os.Remove(filepath)
 
@@ -199,6 +203,7 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 			text = string(data)
 		}
 	} else if ext == ".pdf" {
+		_ = h.jobsRepo.UpdateProgress(ctx, jobID, 15, "Extracting text from PDF via Gemini...")
 		text, err = h.pdfExtractor.ExtractText(ctx, filepath)
 	} else {
 		text, err = parser.ExtractText(filepath)
@@ -209,17 +214,39 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 		return
 	}
 
-	chunks := h.chunker.Chunk(jobID, originalFilename, "document", "uk", text)
+	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 30, "Text extracted, detecting metadata...")
+
+	// --- Auto-detect document metadata via Gemini Structured Output ---
+	lang := "uk"
+	docType := "general"
+	if h.metaExtractor != nil {
+		meta, metaErr := h.metaExtractor.ExtractMetadata(ctx, text)
+		if metaErr != nil {
+			log.Printf("[WARN] Metadata extraction failed for %s, using defaults: %v", originalFilename, metaErr)
+		} else {
+			lang = meta.Language
+			docType = meta.DocType
+			log.Printf("[INFO] Detected metadata for %s: lang=%s, type=%s", originalFilename, lang, docType)
+		}
+	}
+
+	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 50, "Splitting document into chunks...")
+
+	chunks := h.chunker.Chunk(jobID, originalFilename, docType, lang, text)
 	if len(chunks) == 0 {
 		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("no chunks extracted, file might be empty"))
 		return
 	}
+
+	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 60, fmt.Sprintf("Generating embeddings for %d chunks...", len(chunks)))
 
 	if err := h.vectorStore.UpsertChunks(ctx, chunks); err != nil {
 		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("qdrant error: %w", err))
 		return
 	}
 
+	_ = h.jobsRepo.UpdateChunksCount(ctx, jobID, len(chunks))
+	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 100, "Indexing completed")
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusCompleted, nil)
 }
 
@@ -251,4 +278,31 @@ func supportedExtList() string {
 		exts = append(exts, ext)
 	}
 	return strings.Join(exts, ", ")
+}
+
+// HandleDeleteDocument handles DELETE /admin/documents/{document_id}.
+// Removes all chunks belonging to a document from the vector store.
+func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Request) {
+	documentID := chi.URLParam(r, "document_id")
+	if documentID == "" {
+		jsonError(w, "missing_document_id", "document_id missing in URL", http.StatusBadRequest)
+		return
+	}
+
+	slog.Info("Deleting document from vector store", "document_id", documentID)
+
+	if err := h.vectorStore.DeleteByDocumentID(r.Context(), documentID); err != nil {
+		slog.Error("Failed to delete document", "document_id", documentID, "error", err)
+		jsonError(w, "delete_error", "Failed to delete document chunks", http.StatusInternalServerError)
+		return
+	}
+
+	slog.Info("Document deleted successfully", "document_id", documentID)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":      "deleted",
+		"document_id": documentID,
+	})
 }

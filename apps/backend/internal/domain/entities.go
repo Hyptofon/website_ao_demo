@@ -53,12 +53,15 @@ const (
 
 // UploadJob represents an async job to extract and index a document.
 type UploadJob struct {
-	ID        string    `json:"id"`
-	Filename  string    `json:"filename"`
-	Status    JobStatus `json:"status"`
-	Error     string    `json:"error,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID          string    `json:"id"`
+	Filename    string    `json:"filename"`
+	Status      JobStatus `json:"status"`
+	Error       string    `json:"error,omitempty"`
+	Progress    int       `json:"progress"`               // 0-100 percentage
+	CurrentStep string    `json:"current_step,omitempty"`  // Human-readable step description
+	ChunksCount int       `json:"chunks_count,omitempty"`  // Total chunks produced
+	CreatedAt   time.Time `json:"created_at"`
+	UpdatedAt   time.Time `json:"updated_at"`
 }
 
 // ChatRequest is the inbound DTO from the HTTP layer.

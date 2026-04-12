@@ -99,9 +99,11 @@ func extractResult(body string) string {
 	// Fast path: {"result":"value"}
 	prefix := `{"result":"`
 	if strings.HasPrefix(body, prefix) {
-		end := strings.LastIndex(body, `"`)
-		if end > len(prefix) {
-			return body[len(prefix):end]
+		// Find the closing quote (not the one right after prefix for empty strings)
+		rest := body[len(prefix):]
+		end := strings.Index(rest, `"`)
+		if end >= 0 {
+			return rest[:end]
 		}
 	}
 	// null result (cache miss)

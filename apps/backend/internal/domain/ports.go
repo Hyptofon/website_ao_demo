@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"io"
+	"time"
 )
 
 // ─── Port interfaces (Dependency Inversion) ───────────────────────────────────
@@ -49,6 +50,15 @@ type AnalyticsRepo interface {
 
 	// Summary returns aggregated stats for the admin dashboard.
 	Summary(ctx context.Context, days int) (*AnalyticsSummary, error)
+
+	// TopQueries returns the most frequent queries in the last N days.
+	TopQueries(ctx context.Context, days, limit int) ([]TopQuery, error)
+
+	// DailyStats returns per-day aggregated analytics.
+	DailyStats(ctx context.Context, days int) ([]DailyStat, error)
+
+	// FeedbackStats returns aggregated feedback counts and ratio.
+	FeedbackStats(ctx context.Context, days int) (*FeedbackStat, error)
 }
 
 // AnalyticsSummary is a read-only projection for the admin dashboard.
@@ -58,4 +68,80 @@ type AnalyticsSummary struct {
 	PositiveFeedback int     `json:"positive_feedback"`
 	NegativeFeedback int     `json:"negative_feedback"`
 	AvgResponseMs    float64 `json:"avg_response_ms"`
+}
+
+// ─── Phase 2: Audit & Document ports ────────────────────────────────────────
+
+// AuditRepo records and retrieves admin audit log entries.
+type AuditRepo interface {
+	// Record persists an audit log entry.
+	Record(ctx context.Context, entry AuditEntry) error
+
+	// List returns paginated audit entries (newest first).
+	List(ctx context.Context, offset, limit int) ([]AuditEntry, int, error)
+}
+
+// DocumentRepo manages document metadata in the knowledge base.
+type DocumentRepo interface {
+	// Create inserts a new document record.
+	Create(ctx context.Context, doc *DocumentRecord) error
+
+	// List returns all document records (newest first).
+	List(ctx context.Context) ([]DocumentRecord, error)
+
+	// GetByID returns a single document by ID.
+	GetByID(ctx context.Context, id string) (*DocumentRecord, error)
+
+	// Delete removes a document record by ID.
+	Delete(ctx context.Context, id string) error
+
+	// UpdateChunkCount sets the final chunk count after indexing.
+	UpdateChunkCount(ctx context.Context, id string, count int) error
+}
+
+// ─── Phase 3: Cache, A/B Testing, Suggestions ──────────────────────────────
+
+// CacheStore is the port for caching embeddings and responses (Redis/Upstash).
+type CacheStore interface {
+	// Get retrieves a cached value by key. Returns ("", nil) on miss.
+	Get(ctx context.Context, key string) (string, error)
+
+	// Set stores a value with a TTL. ttl=0 means no expiration.
+	Set(ctx context.Context, key string, value string, ttl time.Duration) error
+
+	// Delete removes a cached key.
+	Delete(ctx context.Context, key string) error
+}
+
+// PromptRepo manages prompt variant storage for A/B testing.
+type PromptRepo interface {
+	// ActiveVariants returns all active prompt variants for a language.
+	ActiveVariants(ctx context.Context, lang Language) ([]PromptVariant, error)
+
+	// IncrementUsage atomically increments usage_count for a variant.
+	IncrementUsage(ctx context.Context, variantID int64) error
+
+	// RecordScore records feedback score for a variant (updates running average).
+	RecordScore(ctx context.Context, variantID int64, score float64) error
+
+	// List returns all prompt variants (for admin panel).
+	List(ctx context.Context) ([]PromptVariant, error)
+
+	// Create inserts a new prompt variant.
+	Create(ctx context.Context, variant *PromptVariant) error
+
+	// SetActive toggles the is_active flag.
+	SetActive(ctx context.Context, id int64, active bool) error
+}
+
+// SuggestionsRepo manages suggested questions.
+type SuggestionsRepo interface {
+	// List returns active suggestions for a language.
+	List(ctx context.Context, lang Language, limit int) ([]SuggestedQuestion, error)
+
+	// Upsert creates or updates a suggested question.
+	Upsert(ctx context.Context, q *SuggestedQuestion) error
+
+	// DeleteAuto removes all auto-generated suggestions for refresh.
+	DeleteAuto(ctx context.Context, lang Language) error
 }

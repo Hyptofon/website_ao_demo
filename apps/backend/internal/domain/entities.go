@@ -126,4 +126,99 @@ var (
 
 	// ErrNoContext is returned when Qdrant returns no relevant chunks.
 	ErrNoContext = errors.New("no relevant context found")
+
+	// ErrUnauthorized is returned when the admin is not authenticated.
+	ErrUnauthorized = errors.New("unauthorized")
+
+	// ErrForbidden is returned when the admin email is not in the whitelist.
+	ErrForbidden = errors.New("forbidden: email not in admin whitelist")
+
+	// ErrDocumentNotFound is returned when a document record does not exist.
+	ErrDocumentNotFound = errors.New("document not found")
 )
+
+// ─── Phase 2: Admin & Audit ─────────────────────────────────────────────────
+
+// AdminAction represents a type of auditable admin operation.
+type AdminAction string
+
+const (
+	ActionLogin          AdminAction = "login"
+	ActionUploadDocument AdminAction = "upload_document"
+	ActionDeleteDocument AdminAction = "delete_document"
+	ActionViewAnalytics  AdminAction = "view_analytics"
+	ActionViewAuditLog   AdminAction = "view_audit_log"
+)
+
+// AuditEntry records a single admin action for the audit log.
+type AuditEntry struct {
+	ID         int64       `json:"id"`
+	AdminEmail string      `json:"admin_email"`
+	Action     AdminAction `json:"action"`
+	Target     string      `json:"target,omitempty"`  // e.g. document filename
+	Details    string      `json:"details,omitempty"` // extra context (JSON)
+	IP         string      `json:"ip,omitempty"`
+	CreatedAt  time.Time   `json:"created_at"`
+}
+
+// DocumentRecord represents a tracked document in the knowledge base.
+type DocumentRecord struct {
+	ID         string    `json:"id"`
+	Filename   string    `json:"filename"`
+	DocType    string    `json:"doc_type"`
+	Language   Language  `json:"language"`
+	ChunkCount int       `json:"chunk_count"`
+	Summary    string    `json:"summary,omitempty"`
+	UploadedBy string    `json:"uploaded_by"` // admin email
+	UploadedAt time.Time `json:"uploaded_at"`
+}
+
+// ─── Phase 2: Extended Analytics ─────────────────────────────────────────────
+
+// TopQuery is an aggregated view of the most frequent queries.
+type TopQuery struct {
+	QueryHash string `json:"query_hash"`
+	Count     int    `json:"count"`
+	Language  string `json:"language"`
+	LastSeen  string `json:"last_seen"` // RFC3339
+}
+
+// DailyStat holds analytics for a single day.
+type DailyStat struct {
+	Date             string  `json:"date"` // YYYY-MM-DD
+	TotalQueries     int     `json:"total_queries"`
+	BlockedQueries   int     `json:"blocked_queries"`
+	AvgResponseMs    float64 `json:"avg_response_ms"`
+	PositiveFeedback int     `json:"positive_feedback"`
+	NegativeFeedback int     `json:"negative_feedback"`
+}
+
+// FeedbackStat provides a high-level view of user satisfaction.
+type FeedbackStat struct {
+	Total    int     `json:"total"`
+	Positive int     `json:"positive"`
+	Negative int     `json:"negative"`
+	Ratio    float64 `json:"ratio"` // positive / total, 0-1
+}
+
+// ─── Phase 3: A/B Testing & Suggestions ──────────────────────────────────────
+
+// PromptVariant represents a system prompt variant for A/B testing.
+type PromptVariant struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`       // e.g. "concise_v2"
+	Language   Language `json:"language"`
+	PromptText string   `json:"prompt_text"`
+	IsActive   bool     `json:"is_active"`
+	UsageCount int64    `json:"usage_count"`
+	AvgScore   float64  `json:"avg_score"` // avg feedback as -1..1
+}
+
+// SuggestedQuestion is a pre-defined or auto-generated question hint.
+type SuggestedQuestion struct {
+	ID       int64    `json:"id"`
+	Question string   `json:"question"`
+	Language Language `json:"language"`
+	IsAuto   bool     `json:"is_auto"`   // auto-generated from analytics
+	Priority int      `json:"priority"` // lower = shown first
+}

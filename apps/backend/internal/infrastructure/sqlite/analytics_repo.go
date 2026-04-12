@@ -92,3 +92,106 @@ func (r *AnalyticsRepo) Summary(ctx context.Context, days int) (*domain.Analytic
 	}
 	return s, nil
 }
+
+// TopQueries returns the most frequent query hashes in the last N days.
+func (r *AnalyticsRepo) TopQueries(ctx context.Context, days, limit int) ([]domain.TopQuery, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT query_hash, COUNT(*) as cnt, language, MAX(created_at) as last_seen
+		FROM queries
+		WHERE created_at >= ? AND is_blocked = 0
+		GROUP BY query_hash
+		ORDER BY cnt DESC
+		LIMIT ?
+	`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: top queries: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.TopQuery
+	for rows.Next() {
+		var q domain.TopQuery
+		if err := rows.Scan(&q.QueryHash, &q.Count, &q.Language, &q.LastSeen); err != nil {
+			return nil, fmt.Errorf("sqlite: scan top query: %w", err)
+		}
+		results = append(results, q)
+	}
+	return results, rows.Err()
+}
+
+// DailyStats returns per-day aggregated analytics for the last N days.
+func (r *AnalyticsRepo) DailyStats(ctx context.Context, days int) ([]domain.DailyStat, error) {
+	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT 
+			DATE(created_at) as day,
+			COUNT(*) as total,
+			SUM(CASE WHEN is_blocked = 1 THEN 1 ELSE 0 END) as blocked,
+			AVG(response_ms) as avg_ms,
+			SUM(CASE WHEN feedback = 1 THEN 1 ELSE 0 END) as pos,
+			SUM(CASE WHEN feedback = -1 THEN 1 ELSE 0 END) as neg
+		FROM queries
+		WHERE created_at >= ?
+		GROUP BY DATE(created_at)
+		ORDER BY day ASC
+	`, since)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: daily stats: %w", err)
+	}
+	defer rows.Close()
+
+	var stats []domain.DailyStat
+	for rows.Next() {
+		var s domain.DailyStat
+		var avgMs sql.NullFloat64
+		if err := rows.Scan(&s.Date, &s.TotalQueries, &s.BlockedQueries, &avgMs, &s.PositiveFeedback, &s.NegativeFeedback); err != nil {
+			return nil, fmt.Errorf("sqlite: scan daily stat: %w", err)
+		}
+		if avgMs.Valid {
+			s.AvgResponseMs = avgMs.Float64
+		}
+		stats = append(stats, s)
+	}
+	return stats, rows.Err()
+}
+
+// FeedbackStats returns aggregated feedback counts and positivity ratio.
+func (r *AnalyticsRepo) FeedbackStats(ctx context.Context, days int) (*domain.FeedbackStat, error) {
+	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+
+	row := r.db.QueryRowContext(ctx, `
+		SELECT
+			COUNT(*) FILTER (WHERE feedback != 0) as total,
+			SUM(CASE WHEN feedback = 1 THEN 1 ELSE 0 END) as pos,
+			SUM(CASE WHEN feedback = -1 THEN 1 ELSE 0 END) as neg
+		FROM queries
+		WHERE created_at >= ?
+	`, since)
+
+	fs := &domain.FeedbackStat{}
+	if err := row.Scan(&fs.Total, &fs.Positive, &fs.Negative); err != nil {
+		// SQLite doesn't support FILTER, use fallback
+		row2 := r.db.QueryRowContext(ctx, `
+			SELECT
+				SUM(CASE WHEN feedback != 0 THEN 1 ELSE 0 END) as total,
+				SUM(CASE WHEN feedback = 1 THEN 1 ELSE 0 END) as pos,
+				SUM(CASE WHEN feedback = -1 THEN 1 ELSE 0 END) as neg
+			FROM queries
+			WHERE created_at >= ?
+		`, since)
+		if err := row2.Scan(&fs.Total, &fs.Positive, &fs.Negative); err != nil {
+			return nil, fmt.Errorf("sqlite: feedback stats: %w", err)
+		}
+	}
+
+	if fs.Total > 0 {
+		fs.Ratio = float64(fs.Positive) / float64(fs.Total)
+	}
+	return fs, nil
+}

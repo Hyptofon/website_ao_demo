@@ -118,12 +118,17 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		if deps.AdminHandler != nil {
 			// Documents
 			r.Get("/documents", deps.AdminHandler.HandleListDocuments)
+			r.Get("/documents/{id}/download", deps.AdminHandler.HandleDownloadDocument)
+			r.Patch("/documents/{id}/rename", deps.AdminHandler.HandleRenameDocument)
 
 			// Analytics
 			r.Get("/analytics/summary", deps.AdminHandler.HandleAnalyticsSummary)
 			r.Get("/analytics/daily", deps.AdminHandler.HandleDailyStats)
 			r.Get("/analytics/top-queries", deps.AdminHandler.HandleTopQueries)
 			r.Get("/analytics/feedback", deps.AdminHandler.HandleFeedbackStats)
+
+			// User queries (individual rows)
+			r.Get("/queries", deps.AdminHandler.HandleRecentQueries)
 
 			// Audit log
 			r.Get("/audit", deps.AdminHandler.HandleAuditLog)

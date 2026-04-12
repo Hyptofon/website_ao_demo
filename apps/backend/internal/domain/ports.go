@@ -23,6 +23,9 @@ type VectorStore interface {
 
 	// DeleteByDocumentID removes all chunks belonging to a document.
 	DeleteByDocumentID(ctx context.Context, documentID string) error
+
+	// RenameDocumentPayload updates the 'document_name' payload for all points belonging to a document.
+	RenameDocumentPayload(ctx context.Context, documentID string, newName string) error
 }
 
 // LLMClient is the port for the Large Language Model (Gemini).
@@ -59,6 +62,9 @@ type AnalyticsRepo interface {
 
 	// FeedbackStats returns aggregated feedback counts and ratio.
 	FeedbackStats(ctx context.Context, days int) (*FeedbackStat, error)
+
+	// RecentQueries returns individual query rows for admin inspection.
+	RecentQueries(ctx context.Context, days, limit int) ([]QueryRow, error)
 }
 
 // AnalyticsSummary is a read-only projection for the admin dashboard.
@@ -94,6 +100,9 @@ type DocumentRepo interface {
 
 	// Delete removes a document record by ID.
 	Delete(ctx context.Context, id string) error
+	
+	// Rename updates the filename of a document
+	Rename(ctx context.Context, id string, newName string) error
 
 	// UpdateChunkCount sets the final chunk count after indexing.
 	UpdateChunkCount(ctx context.Context, id string, count int) error

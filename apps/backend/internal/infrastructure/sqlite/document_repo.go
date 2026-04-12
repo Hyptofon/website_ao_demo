@@ -97,3 +97,17 @@ func (r *DocumentRepo) UpdateChunkCount(ctx context.Context, id string, count in
 	_, err := r.db.ExecContext(ctx, "UPDATE documents SET chunk_count = ? WHERE id = ?", count, id)
 	return err
 }
+
+// Rename updates the filename of a document record by ID.
+func (r *DocumentRepo) Rename(ctx context.Context, id string, newName string) error {
+	res, err := r.db.ExecContext(ctx, "UPDATE documents SET filename = ? WHERE id = ?", newName, id)
+	if err != nil {
+		return fmt.Errorf("document rename: %w", err)
+	}
+	rows, _ := res.RowsAffected()
+	if rows == 0 {
+		return domain.ErrDocumentNotFound
+	}
+	return nil
+}
+

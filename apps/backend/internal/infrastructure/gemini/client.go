@@ -143,11 +143,8 @@ func (c *Client) StreamAnswer(
 		}
 	}
 
-	// Signal end of stream
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	if f, ok := w.(interface{ Flush() }); ok {
-		f.Flush()
-	}
+	// We no longer signal end of stream here because the HTTP handler (chat_handler.go)
+	// needs to append additional events (meta, sources) before signaling [DONE].
 	return nil
 }
 

@@ -1,15 +1,15 @@
 // AdminPanel — root orchestrator.
-// Uses client:only="react" in Astro, so no SSR concerns.
+// Uses client:only="react" in Astro for full client-side rendering.
 
 import { useState, useEffect } from "react";
 import { Toaster } from "sonner";
+import { AnimatePresence, motion } from "motion/react";
 import { getToken, clearToken } from "./api";
 import { LoginScreen } from "./LoginScreen";
 import { Sidebar, type Tab } from "./Sidebar";
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
-import { AuditTab } from "./AuditTab";
-import { SettingsTab } from "./SettingsTab";
+import { QueriesTab } from "./QueriesTab";
 import { RefreshCw } from "lucide-react";
 
 export default function AdminPanel() {
@@ -31,8 +31,13 @@ export default function AdminPanel() {
 
   if (!ready) {
     return (
-      <div className="flex min-h-screen items-center justify-center bg-layout-bg text-zinc-500">
-        <RefreshCw className="animate-spin" size={28} />
+      <div className="flex min-h-screen items-center justify-center bg-[#0a0c0f]">
+        <motion.div
+          animate={{ rotate: 360 }}
+          transition={{ repeat: Infinity, duration: 1, ease: "linear" }}
+        >
+          <RefreshCw size={28} className="text-zinc-600" />
+        </motion.div>
       </div>
     );
   }
@@ -42,7 +47,7 @@ export default function AdminPanel() {
       <>
         <Toaster
           theme="dark"
-          toastOptions={{ classNames: { toast: "bg-zinc-900 border-zinc-800 text-zinc-200" } }}
+          toastOptions={{ classNames: { toast: "!bg-zinc-900 !border-zinc-800 !text-zinc-200" } }}
         />
         <LoginScreen onAuth={() => setAuthed(true)} />
       </>
@@ -50,10 +55,10 @@ export default function AdminPanel() {
   }
 
   return (
-    <div className="flex min-h-screen bg-layout-bg font-[Roboto,system-ui,sans-serif] text-zinc-300">
+    <div className="flex min-h-screen bg-[#0a0c0f] font-[Roboto,system-ui,sans-serif] text-zinc-300 antialiased">
       <Toaster
         theme="dark"
-        toastOptions={{ classNames: { toast: "bg-zinc-900 border-zinc-800 text-zinc-200" } }}
+        toastOptions={{ classNames: { toast: "!bg-zinc-900 !border-zinc-800 !text-zinc-200" } }}
       />
 
       <Sidebar
@@ -62,13 +67,22 @@ export default function AdminPanel() {
         onLogout={() => { clearToken(); setAuthed(false); }}
       />
 
-      {/* Main content area — offset by sidebar width */}
+      {/* Main content */}
       <main className="ml-[220px] flex-1 overflow-y-auto p-6 md:ml-[240px] md:p-8">
         <div className="mx-auto max-w-[1100px]">
-          {tab === "overview" && <OverviewTab />}
-          {tab === "documents" && <DocumentsTab />}
-          {tab === "audit" && <AuditTab />}
-          {tab === "settings" && <SettingsTab />}
+          <AnimatePresence mode="wait">
+            <motion.div
+              key={tab}
+              initial={{ opacity: 0, y: 8 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -8 }}
+              transition={{ duration: 0.25 }}
+            >
+              {tab === "overview" && <OverviewTab />}
+              {tab === "documents" && <DocumentsTab />}
+              {tab === "queries" && <QueriesTab />}
+            </motion.div>
+          </AnimatePresence>
         </div>
       </main>
     </div>

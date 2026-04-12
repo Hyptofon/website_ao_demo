@@ -19,6 +19,7 @@ func InitDB(dsn string) (*sql.DB, error) {
 
 	// Important pragmas for concurrent SQLite access
 	db.Exec("PRAGMA journal_mode=WAL;")
+	db.Exec("PRAGMA busy_timeout=5000;")
 	db.Exec("PRAGMA synchronous=NORMAL;")
 	db.Exec("PRAGMA foreign_keys=ON;")
 
@@ -138,22 +139,13 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	for _, m := range migrations {
-		var exists int
-		err := db.QueryRow("SELECT COUNT(*) FROM schema_version WHERE version = ?", m.Version).Scan(&exists)
-		if err != nil {
-			return fmt.Errorf("check schema version %d: %w", m.Version, err)
-		}
-		if exists > 0 {
-			continue // already applied
-		}
-
 		slog.Info("Applying migration", "version", m.Version, "description", m.Description)
 
 		if _, err := db.Exec(m.SQL); err != nil {
 			return fmt.Errorf("migration v%d (%s): %w", m.Version, m.Description, err)
 		}
 
-		if _, err := db.Exec("INSERT INTO schema_version (version, description) VALUES (?, ?)", m.Version, m.Description); err != nil {
+		if _, err := db.Exec("INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)", m.Version, m.Description); err != nil {
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
 		}
 	}

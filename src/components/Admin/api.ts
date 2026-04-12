@@ -1,5 +1,4 @@
 // ─── Admin Panel API Client ────────────────────────────────────────────────
-// Typed API layer mirroring Chat/api.ts pattern.
 
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8080";
 
@@ -63,22 +62,15 @@ export interface AuditResponse {
   limit: number;
 }
 
-export interface PromptVariant {
-  id: number;
-  name: string;
+export interface QueryRow {
+  query_hash: string;
+  query_text: string;
   language: string;
-  prompt_text: string;
-  is_active: boolean;
-  usage_count: number;
-  avg_score: number;
-}
-
-export interface SuggestedQuestion {
-  id: number;
-  question: string;
-  language: string;
-  is_auto: boolean;
-  priority: number;
+  response_ms: number;
+  sources_cnt: number;
+  feedback: number;
+  is_blocked: number;
+  created_at: string;
 }
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
@@ -126,15 +118,43 @@ export const uploadDocument = async (file: File) => {
   fd.append("file", file);
   const h: Record<string, string> = {};
   if (token) h["Authorization"] = `Bearer ${token}`;
-  const res = await fetch(`${API_BASE}/admin/documents/upload`, { method: "POST", headers: h, body: fd });
-  if (!res.ok) throw new Error(await res.text());
-  return res.json() as Promise<{ job_id: string }>;
+  
+  const uploadRes = await fetch(`${API_BASE}/admin/documents/upload`, { method: "POST", headers: h, body: fd });
+  if (!uploadRes.ok) throw new Error(await uploadRes.text());
+  
+  const { job_id } = await uploadRes.json() as { job_id: string };
+
+  // Poll for completion
+  return new Promise<void>((resolve, reject) => {
+    const check = async () => {
+      try {
+        const jobRes = await fetch(`${API_BASE}/admin/documents/jobs/${job_id}`, { headers: h });
+        if (!jobRes.ok) throw new Error("Failed to check status");
+        
+        const job = await jobRes.json() as { status: string; error: string; progress: number };
+        
+        if (job.status === "completed") {
+          resolve();
+        } else if (job.status === "failed") {
+          reject(new Error(job.error || "Upload failed during processing"));
+        } else {
+          setTimeout(check, 1500); // Check again in 1.5s
+        }
+      } catch (err) {
+        reject(err);
+      }
+    };
+    setTimeout(check, 1000);
+  });
 };
 
-export const fetchAudit = (offset = 0, limit = 20) => api<AuditResponse>(`/admin/audit?offset=${offset}&limit=${limit}`);
+export const fetchAudit = (offset = 0, limit = 5) => api<AuditResponse>(`/admin/audit?offset=${offset}&limit=${limit}`);
 
-export const fetchPrompts = () => api<PromptVariant[]>("/admin/prompts");
-export const createPrompt = (d: Partial<PromptVariant>) => api<PromptVariant>("/admin/prompts", { method: "POST", body: JSON.stringify(d) });
+export const fetchQueries = (days = 30, limit = 50) => api<QueryRow[]>(`/admin/queries?days=${days}&limit=${limit}`);
 
-export const fetchSuggestions = (lang = "uk") => api<SuggestedQuestion[]>(`/admin/suggestions?lang=${lang}&limit=20`);
-export const createSuggestion = (d: Partial<SuggestedQuestion>) => api<SuggestedQuestion>("/admin/suggestions", { method: "POST", body: JSON.stringify(d) });
+export const renameDocument = (id: string, newName: string) => api<unknown>(`/admin/documents/${id}/rename`, {
+  method: "PATCH",
+  body: JSON.stringify({ filename: newName }),
+});
+
+export const getDocumentDownloadUrl = (id: string) => `${API_BASE}/admin/documents/${id}/download`;

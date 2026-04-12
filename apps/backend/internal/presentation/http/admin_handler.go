@@ -2,10 +2,16 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
+
+	"github.com/go-chi/chi/v5"
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/auth"
@@ -23,6 +29,7 @@ type AdminHandler struct {
 	documentRepo  domain.DocumentRepo
 	promptRepo    domain.PromptRepo
 	suggestRepo   domain.SuggestionsRepo
+	vectorStore   domain.VectorStore
 	allowedEmails []string
 	frontendURL   string // URL of the frontend admin page for OAuth redirect
 }
@@ -36,6 +43,7 @@ func NewAdminHandler(
 	documentRepo domain.DocumentRepo,
 	promptRepo domain.PromptRepo,
 	suggestRepo domain.SuggestionsRepo,
+	vectorStore domain.VectorStore,
 	allowedEmails []string,
 	frontendURL string,
 ) *AdminHandler {
@@ -50,6 +58,7 @@ func NewAdminHandler(
 		documentRepo:  documentRepo,
 		promptRepo:    promptRepo,
 		suggestRepo:   suggestRepo,
+		vectorStore:   vectorStore,
 		allowedEmails: allowedEmails,
 		frontendURL:   frontendURL,
 	}
@@ -215,6 +224,26 @@ func (h *AdminHandler) HandleFeedbackStats(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(stats)
 }
 
+// HandleRecentQueries returns individual query rows for admin inspection.
+// GET /admin/queries?days=30&limit=50
+func (h *AdminHandler) HandleRecentQueries(w http.ResponseWriter, r *http.Request) {
+	days := queryInt(r, "days", 30)
+	limit := queryInt(r, "limit", 50)
+
+	queries, err := h.analyticsRepo.RecentQueries(r.Context(), days, limit)
+	if err != nil {
+		slog.Error("Recent queries failed", "error", err)
+		jsonError(w, "db_error", "Failed to get recent queries", http.StatusInternalServerError)
+		return
+	}
+	if queries == nil {
+		queries = []domain.QueryRow{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(queries)
+}
+
 // ─── Document Endpoints ─────────────────────────────────────────────────────
 
 // HandleListDocuments returns all knowledge base documents.
@@ -233,6 +262,83 @@ func (h *AdminHandler) HandleListDocuments(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(docs)
+}
+
+// HandleDownloadDocument serves the raw document file.
+// GET /admin/documents/{id}/download
+func (h *AdminHandler) HandleDownloadDocument(w http.ResponseWriter, r *http.Request) {
+	docID := chi.URLParam(r, "id")
+	doc, err := h.documentRepo.GetByID(r.Context(), docID)
+	if err != nil {
+		jsonError(w, "not_found", "Document not found", http.StatusNotFound)
+		return
+	}
+
+	ext := ""
+	for _, supportedExt := range []string{".pdf", ".docx", ".xlsx", ".txt"} {
+		// Just guess the extension or parse from original filename
+		if len(doc.Filename) > len(supportedExt) && doc.Filename[len(doc.Filename)-len(supportedExt):] == supportedExt {
+			ext = supportedExt
+			break
+		}
+	}
+	
+	// A simpler way: we know it was saved as `jobID + ext` inside data/documents/
+	ext = filepath.Ext(doc.Filename)
+	filePath := filepath.Join(".", "data", "documents", docID+strings.ToLower(ext))
+
+	// Ensure file exists
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		jsonError(w, "file_missing", "The raw file is not available on the server", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Disposition", `inline; filename="`+doc.Filename+`"`)
+	http.ServeFile(w, r, filePath)
+}
+
+// HandleRenameDocument updates a document's filename.
+// PATCH /admin/documents/{id}/rename
+func (h *AdminHandler) HandleRenameDocument(w http.ResponseWriter, r *http.Request) {
+	docID := chi.URLParam(r, "id")
+
+	var req struct {
+		Filename string `json:"filename"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Filename == "" {
+		jsonError(w, "bad_request", "Valid filename is required", http.StatusBadRequest)
+		return
+	}
+
+	// Rename in SQLite
+	if err := h.documentRepo.Rename(r.Context(), docID, req.Filename); err != nil {
+		slog.Error("Rename document failed", "error", err)
+		jsonError(w, "db_error", "Failed to rename document", http.StatusInternalServerError)
+		return
+	}
+
+	// Rename payload in Qdrant
+	if h.vectorStore != nil {
+		if err := h.vectorStore.RenameDocumentPayload(r.Context(), docID, req.Filename); err != nil {
+			slog.Error("Qdrant rename payload failed", "error", err)
+		}
+	}
+
+	if h.auditRepo != nil {
+		adminEmail := "system"
+		if email, ok := r.Context().Value("admin_email").(string); ok {
+			adminEmail = email
+		}
+		_ = h.auditRepo.Record(r.Context(), domain.AuditEntry{
+			AdminEmail: adminEmail,
+			Action:     "rename_document",
+			Target:     fmt.Sprintf("ID: %s, New Name: %s", docID, req.Filename),
+			IP:         realIP(r),
+		})
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // ─── Audit Log Endpoint ─────────────────────────────────────────────────────

@@ -119,24 +119,28 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 // HandleAdminUpload handles POST /admin/documents/upload asynchronously.
 func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		slog.Error("Upload: ParseMultipartForm failed", "error", err)
 		jsonError(w, "invalid_form", "Cannot parse multipart form", http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		slog.Error("Upload: FormFile 'file' missing", "error", err)
 		jsonError(w, "missing_file", "No file in request", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	if !parser.IsSupported(header.Filename) {
+		slog.Error("Upload: Unsupported format", "filename", header.Filename)
 		jsonError(w, "invalid_type", fmt.Sprintf("Unsupported format. Supported: %s", supportedExtList()), http.StatusBadRequest)
 		return
 	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
+		slog.Error("Upload: ReadAll file failed", "error", err)
 		jsonError(w, "read_error", "Cannot read file", http.StatusInternalServerError)
 		return
 	}
@@ -152,30 +156,42 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.jobsRepo.CreateJob(r.Context(), job); err != nil {
+		slog.Error("Upload: CreateJob failed", "error", err, "jobID", jobID)
 		jsonError(w, "db_error", "Cannot create job record", http.StatusInternalServerError)
 		return
 	}
 
-	// Save to temp file for the background worker
+	// Save to permanent storage for viewing and background worker
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	tmpFile, err := os.CreateTemp("", "upload-"+jobID+"-*"+ext)
+	docsDir := filepath.Join(".", "data", "documents")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		slog.Error("Upload: MkdirAll docsDir failed", "error", err)
+		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
+		jsonError(w, "fs_error", "Cannot create documents directory", http.StatusInternalServerError)
+		return
+	}
+
+	savedFilepath := filepath.Join(docsDir, jobID+ext)
+	outFile, err := os.Create(savedFilepath)
 	if err != nil {
+		slog.Error("Upload: Create file failed", "error", err)
 		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
-		jsonError(w, "temp_error", "Cannot create temp file", http.StatusInternalServerError)
+		jsonError(w, "fs_error", "Cannot create permanent file", http.StatusInternalServerError)
 		return
 	}
-	defer tmpFile.Close()
+	defer outFile.Close()
 
-	if _, err := tmpFile.Write(data); err != nil {
+	if _, err := outFile.Write(data); err != nil {
 		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
-		jsonError(w, "write_error", "Cannot write temp file", http.StatusInternalServerError)
+		jsonError(w, "write_error", "Cannot write permanent file", http.StatusInternalServerError)
 		return
 	}
 
-	filepath := tmpFile.Name()
+	// Wait, we can't shadow filepath import if we reuse `filepath` as a variable! 
+	// Ah, the original code had `filepath := tmpFile.Name()`
 
 	// Spin background worker
-	go h.processBackgroundUpload(jobID, header.Filename, filepath)
+	go h.processBackgroundUpload(jobID, header.Filename, savedFilepath)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted) // 202 Accepted
@@ -189,9 +205,6 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 	ctx := context.Background()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
-
-	// Ensure file cleanup after processing
-	defer os.Remove(filepath)
 
 	var text string
 	var err error

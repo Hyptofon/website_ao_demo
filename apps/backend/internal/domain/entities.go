@@ -75,12 +75,25 @@ type ChatRequest struct {
 type QueryRecord struct {
 	ID          int64     `json:"id"`
 	QueryHash   string    `json:"query_hash"`
+	QueryText   string    `json:"query_text"`
 	Language    Language  `json:"language"`
 	ResponseMs  int64     `json:"response_ms"`
 	SourcesCnt  int       `json:"sources_cnt"`
 	Feedback    Feedback  `json:"feedback"`
 	IsBlocked   bool      `json:"is_blocked"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+// QueryRow is a read-only view of a query for admin inspection.
+type QueryRow struct {
+	QueryHash  string `json:"query_hash"`
+	QueryText  string `json:"query_text"`
+	Language   string `json:"language"`
+	ResponseMs int64  `json:"response_ms"`
+	SourcesCnt int    `json:"sources_cnt"`
+	Feedback   int    `json:"feedback"`
+	IsBlocked  int    `json:"is_blocked"`
+	CreatedAt  string `json:"created_at"`
 }
 
 // Document represents an indexed knowledge-base document.

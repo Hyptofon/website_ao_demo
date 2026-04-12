@@ -1,16 +1,16 @@
 import {
-  BarChart3, FileText, Shield, Settings,
+  BarChart3, FileText, MessageCircle,
   LogOut, Activity,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { motion } from "motion/react";
 
-export type Tab = "overview" | "documents" | "audit" | "settings";
+export type Tab = "overview" | "documents" | "queries";
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
-  { id: "overview", label: "Аналітика", icon: <BarChart3 size={18} /> },
-  { id: "documents", label: "Документи", icon: <FileText size={18} /> },
-  { id: "audit", label: "Журнал дій", icon: <Shield size={18} /> },
-  { id: "settings", label: "Налаштування", icon: <Settings size={18} /> },
+  { id: "overview", label: "Аналітика", icon: <BarChart3 size={18} strokeWidth={1.8} /> },
+  { id: "documents", label: "Документи", icon: <FileText size={18} strokeWidth={1.8} /> },
+  { id: "queries", label: "Запити", icon: <MessageCircle size={18} strokeWidth={1.8} /> },
 ];
 
 export function Sidebar({
@@ -23,39 +23,64 @@ export function Sidebar({
   onLogout: () => void;
 }) {
   return (
-    <aside className="fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-white/[0.06] bg-dark-panel md:w-[240px]">
+    <aside className="fixed inset-y-0 left-0 z-50 flex w-[220px] flex-col border-r border-white/[0.06] bg-[#0e1114]/95 backdrop-blur-xl md:w-[240px]">
       {/* Logo */}
-      <div className="flex items-center gap-2.5 border-b border-white/[0.06] px-5 py-4">
-        <Activity size={22} className="text-brand-blue" />
-        <span className="text-base font-semibold text-white hidden md:inline">Admin Panel</span>
+      <div className="flex items-center gap-3 border-b border-white/[0.06] px-5 py-5">
+        <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500/20 to-blue-600/10 text-blue-400">
+          <Activity size={18} strokeWidth={2} />
+        </div>
+        <div className="hidden md:block">
+          <div className="text-sm font-semibold text-white leading-none">Admin Panel</div>
+          <div className="mt-0.5 text-[10px] text-zinc-600">University Chatbot</div>
+        </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex flex-1 flex-col gap-0.5 px-2.5 py-3">
+      <nav className="flex flex-1 flex-col gap-1 px-3 py-4">
+        <span className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-[0.15em] text-zinc-600">
+          Навігація
+        </span>
         {NAV.map((item) => (
           <button
             key={item.id}
             onClick={() => onChange(item.id)}
             className={cn(
-              "flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-left text-[13px] font-medium transition-all",
+              "relative flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-left text-[13px] font-medium transition-all duration-200",
               active === item.id
-                ? "bg-brand-blue/12 text-brand-blue-soft"
+                ? "text-white"
                 : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-300",
             )}
           >
-            <span className={cn(active === item.id && "text-brand-blue")}>{item.icon}</span>
-            <span className="hidden md:inline">{item.label}</span>
+            {active === item.id && (
+              <motion.div
+                layoutId="sidebar-active"
+                className="absolute inset-0 rounded-xl bg-gradient-to-r from-blue-500/15 to-blue-600/5 ring-1 ring-blue-500/20"
+                transition={{ type: "spring", stiffness: 350, damping: 30 }}
+              />
+            )}
+            <span className={cn("relative z-10", active === item.id && "text-blue-400")}>{item.icon}</span>
+            <span className="relative z-10 hidden md:inline">{item.label}</span>
           </button>
         ))}
       </nav>
 
+      {/* Info Block */}
+      <div className="mx-3 mb-4 hidden rounded-xl border border-blue-500/10 bg-blue-500/5 p-3 text-left md:block">
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-wider text-blue-400">
+          Довідка
+        </label>
+        <p className="text-[11px] leading-relaxed text-zinc-400">
+          Ця панель призначена для керування базою знань чат-бота, аналізу ефективності та перегляду запитів користувачів.
+        </p>
+      </div>
+
       {/* Logout */}
-      <div className="border-t border-white/[0.06] px-2.5 py-3">
+      <div className="border-t border-white/[0.06] px-3 py-3">
         <button
           onClick={onLogout}
-          className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-[13px] text-zinc-500 transition-colors hover:text-red-400"
+          className="flex w-full items-center gap-2.5 rounded-xl px-3 py-2.5 text-[13px] text-zinc-600 transition-all hover:bg-red-500/8 hover:text-red-400"
         >
-          <LogOut size={18} />
+          <LogOut size={18} strokeWidth={1.8} />
           <span className="hidden md:inline">Вийти</span>
         </button>
       </div>

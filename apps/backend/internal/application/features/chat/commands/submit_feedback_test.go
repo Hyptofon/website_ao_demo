@@ -31,6 +31,9 @@ func (m *mockAnalyticsRepo) DailyStats(_ context.Context, _ int) ([]domain.Daily
 func (m *mockAnalyticsRepo) FeedbackStats(_ context.Context, _ int) (*domain.FeedbackStat, error) {
 	return &domain.FeedbackStat{}, nil
 }
+func (m *mockAnalyticsRepo) RecentQueries(_ context.Context, _, _ int) ([]domain.QueryRow, error) {
+	return nil, nil
+}
 
 func TestSubmitFeedback_ValidPositive(t *testing.T) {
 	repo := &mockAnalyticsRepo{}

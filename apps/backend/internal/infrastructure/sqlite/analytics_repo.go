@@ -37,6 +37,9 @@ func NewAnalyticsRepo(db *sql.DB) (*AnalyticsRepo, error) {
 		return nil, fmt.Errorf("sqlite: migrate analytics: %w", err)
 	}
 
+	// Add query_text if it doesn't exist
+	_, _ = db.Exec(`ALTER TABLE queries ADD COLUMN query_text TEXT NOT NULL DEFAULT ""`)
+
 	return &AnalyticsRepo{db: db}, nil
 }
 
@@ -51,9 +54,9 @@ func (r *AnalyticsRepo) Record(ctx context.Context, rec domain.QueryRecord) erro
 		blocked = 1
 	}
 	_, err := r.db.ExecContext(ctx,
-		`INSERT INTO queries (query_hash, language, response_ms, sources_cnt, feedback, is_blocked)
-		 VALUES (?, ?, ?, ?, ?, ?)`,
-		rec.QueryHash, lang, rec.ResponseMs, rec.SourcesCnt, int(rec.Feedback), blocked,
+		`INSERT INTO queries (query_hash, query_text, language, response_ms, sources_cnt, feedback, is_blocked)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		rec.QueryHash, rec.QueryText, lang, rec.ResponseMs, rec.SourcesCnt, int(rec.Feedback), blocked,
 	)
 	return err
 }
@@ -101,10 +104,10 @@ func (r *AnalyticsRepo) TopQueries(ctx context.Context, days, limit int) ([]doma
 	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT query_hash, COUNT(*) as cnt, language, MAX(created_at) as last_seen
+		SELECT query_text as display_name, COUNT(*) as cnt, language, MAX(created_at) as last_seen
 		FROM queries
-		WHERE created_at >= ? AND is_blocked = 0
-		GROUP BY query_hash
+		WHERE created_at >= ? AND is_blocked = 0 AND query_text IS NOT NULL AND query_text != ''
+		GROUP BY display_name
 		ORDER BY cnt DESC
 		LIMIT ?
 	`, since, limit)
@@ -194,4 +197,34 @@ func (r *AnalyticsRepo) FeedbackStats(ctx context.Context, days int) (*domain.Fe
 		fs.Ratio = float64(fs.Positive) / float64(fs.Total)
 	}
 	return fs, nil
+}
+
+// RecentQueries returns individual query rows for admin inspection.
+func (r *AnalyticsRepo) RecentQueries(ctx context.Context, days, limit int) ([]domain.QueryRow, error) {
+	if limit <= 0 {
+		limit = 50
+	}
+	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
+
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT query_hash, COALESCE(NULLIF(query_text, ''), '[Текст не збережено]') as query_text, language, response_ms, sources_cnt, feedback, is_blocked, created_at
+		FROM queries
+		WHERE created_at >= ?
+		ORDER BY created_at DESC
+		LIMIT ?
+	`, since, limit)
+	if err != nil {
+		return nil, fmt.Errorf("sqlite: recent queries: %w", err)
+	}
+	defer rows.Close()
+
+	var results []domain.QueryRow
+	for rows.Next() {
+		var q domain.QueryRow
+		if err := rows.Scan(&q.QueryHash, &q.QueryText, &q.Language, &q.ResponseMs, &q.SourcesCnt, &q.Feedback, &q.IsBlocked, &q.CreatedAt); err != nil {
+			return nil, fmt.Errorf("sqlite: scan query row: %w", err)
+		}
+		results = append(results, q)
+	}
+	return results, rows.Err()
 }

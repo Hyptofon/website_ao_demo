@@ -34,7 +34,21 @@ export default function ChatWidget() {
   const [rateLimit, setRateLimit] = useState<RateLimitState>({ blocked: false, retryAfterSec: 0 });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  const sessionId = useRef(generateId());
+  const sessionId = useRef(() => {
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("cb_session_id");
+      if (stored) return stored;
+      const id = generateId();
+      sessionStorage.setItem("cb_session_id", id);
+      return id;
+    }
+    return generateId();
+  });
+  // Resolve lazy initializer once
+  const getSessionId = () => {
+    if (typeof sessionId.current === "function") sessionId.current = sessionId.current();
+    return sessionId.current as string;
+  };
   const abortRef = useRef<AbortController | null>(null);
   const rateLimitTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -101,7 +115,7 @@ export default function ChatWidget() {
     setInputValue("");
     setIsLoading(true);
 
-    const ctrl = streamChat(text, language, sessionId.current, {
+    const ctrl = streamChat(text, language, getSessionId(), {
       onToken: (token) => {
         setMessages((prev) =>
           prev.map((m) =>
@@ -113,6 +127,13 @@ export default function ChatWidget() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId ? { ...m, sources } : m
+          )
+        );
+      },
+      onMeta: (queryHash: string) => {
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === assistantId ? { ...m, queryHash } : m
           )
         );
       },
@@ -139,7 +160,7 @@ export default function ChatWidget() {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === assistantId
-              ? { ...m, isStreaming: false, queryHash: userMsg.id }
+              ? { ...m, isStreaming: false }
               : m
           )
         );
@@ -158,7 +179,9 @@ export default function ChatWidget() {
 
   const handleNewConversation = () => {
     if (abortRef.current) abortRef.current.abort();
-    sessionId.current = generateId();
+    const newId = generateId();
+    sessionId.current = newId;
+    sessionStorage.setItem("cb_session_id", newId);
     setMessages([
       {
         id: generateId(),

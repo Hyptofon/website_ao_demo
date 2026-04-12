@@ -70,7 +70,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	queryHash := fmt.Sprintf("%x", hash[:8])
 
 	// --- 2. Hybrid search for relevant context ---
-	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 5)
+	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 20) // Retrieve up to 20 chunks
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
@@ -86,14 +86,14 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	seenDocs := make(map[string]bool)
 
 	for _, r := range results {
-		if r.Score < 0.5 {
+		if r.Score < 0.25 { // Lower score threshold to include more context
 			continue
 		}
 		
 		fmt.Fprintf(&contextBuf, "--- Документ: %s (стор. %d) ---\n%s\n\n",
 			r.Chunk.DocumentName, r.Chunk.PageNumber, r.Chunk.Text)
 
-		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 5 {
+		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 15 { // Up to 15 sources
 			seenDocs[r.Chunk.DocumentName] = true
 			sources = append(sources, domain.Source{
 				DocumentName: r.Chunk.DocumentName,
@@ -131,6 +131,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		// Use a detached context so cancellation of the HTTP request doesn't abort the DB insert
 		rec := domain.QueryRecord{
 			QueryHash:  queryHash,
+			QueryText:  req.Message,
 			Language:   req.Language,
 			ResponseMs: elapsed,
 			SourcesCnt: len(sources),

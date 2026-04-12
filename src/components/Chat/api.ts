@@ -19,6 +19,7 @@ export interface FeedbackPayload {
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onSources: (sources: Source[]) => void;
+  onMeta: (queryHash: string) => void;
   onError: (code: string, message: string) => void;
   onDone: () => void;
 }
@@ -82,6 +83,7 @@ export function streamChat(
         for (const line of lines) {
           if (line.startsWith("event: error")) continue;
           if (line.startsWith("event: sources")) continue;
+          if (line.startsWith("event: meta")) continue;
 
           if (line.startsWith("data: ")) {
             const data = line.slice(6);
@@ -97,6 +99,8 @@ export function streamChat(
                 const parsed = JSON.parse(data);
                 if (Array.isArray(parsed)) {
                   callbacks.onSources(parsed as Source[]);
+                } else if (parsed.query_hash) {
+                  callbacks.onMeta(parsed.query_hash);
                 } else if (parsed.error) {
                   callbacks.onError(parsed.error, parsed.message ?? "Unknown error");
                 }

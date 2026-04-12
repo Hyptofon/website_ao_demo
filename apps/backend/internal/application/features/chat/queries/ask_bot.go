@@ -21,21 +21,43 @@ type AskBotQuery struct {
 
 // AskBotResult carries sources and timing info back to the handler.
 type AskBotResult struct {
-	Sources    []domain.Source
-	QueryHash  string
-	StartedAt  time.Time
+	Sources   []domain.Source
+	QueryHash string
+	StartedAt time.Time
+	VariantID int64 // Phase 3: A/B testing prompt variant used (0 = default)
 }
 
-// AskBotHandler orchestrates RAG: embed → search → generate (streaming).
+// AskBotHandler orchestrates RAG: embed → search → [rerank] → generate (streaming).
 type AskBotHandler struct {
-	vectorStore domain.VectorStore
-	llm         domain.LLMClient
-	analytics   domain.AnalyticsRepo
+	vectorStore    domain.VectorStore
+	llm            domain.LLMClient
+	analytics      domain.AnalyticsRepo
+	cache          domain.CacheStore    // Phase 3: optional cache
+	promptSelector *PromptSelector      // Phase 3: A/B testing
+	reranker       *Reranker            // Phase 3: reranking
 }
 
 // NewAskBotHandler constructs the handler with injected dependencies.
 func NewAskBotHandler(vs domain.VectorStore, llm domain.LLMClient, ar domain.AnalyticsRepo) *AskBotHandler {
 	return &AskBotHandler{vectorStore: vs, llm: llm, analytics: ar}
+}
+
+// WithCache sets the optional cache store (Phase 3).
+func (h *AskBotHandler) WithCache(cache domain.CacheStore) *AskBotHandler {
+	h.cache = cache
+	return h
+}
+
+// WithPromptSelector sets the A/B testing prompt selector (Phase 3).
+func (h *AskBotHandler) WithPromptSelector(ps *PromptSelector) *AskBotHandler {
+	h.promptSelector = ps
+	return h
+}
+
+// WithReranker sets the optional reranker (Phase 3).
+func (h *AskBotHandler) WithReranker(rr *Reranker) *AskBotHandler {
+	h.reranker = rr
+	return h
 }
 
 // Handle executes the RAG pipeline and streams tokens to w.
@@ -48,9 +70,14 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	queryHash := fmt.Sprintf("%x", hash[:8])
 
 	// --- 2. Hybrid search for relevant context ---
-	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 5)
+	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 20) // Retrieve up to 20 chunks
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
+	}
+
+	// --- 2.5. Optional reranking (Phase 3) ---
+	if h.reranker != nil {
+		results = h.reranker.Rerank(ctx, req.Message, results)
 	}
 
 	// --- 3. Build context string from top chunks (O(1) deduplication) ---
@@ -59,14 +86,14 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	seenDocs := make(map[string]bool)
 
 	for _, r := range results {
-		if r.Score < 0.5 {
+		if r.Score < 0.25 { // Lower score threshold to include more context
 			continue
 		}
 		
 		fmt.Fprintf(&contextBuf, "--- Документ: %s (стор. %d) ---\n%s\n\n",
 			r.Chunk.DocumentName, r.Chunk.PageNumber, r.Chunk.Text)
 
-		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 5 {
+		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 15 { // Up to 15 sources
 			seenDocs[r.Chunk.DocumentName] = true
 			sources = append(sources, domain.Source{
 				DocumentName: r.Chunk.DocumentName,
@@ -76,10 +103,20 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		}
 	}
 
-	// --- 4. Select system prompt by language ---
-	sysPrompt := domain.SystemPromptUA
-	if req.Language == domain.LangEn {
-		sysPrompt = domain.SystemPromptEN
+	// --- 4. Select system prompt (Phase 3: A/B testing) ---
+	var sysPrompt string
+	var variantID int64
+
+	if h.promptSelector != nil {
+		selection := h.promptSelector.Select(ctx, req.Language)
+		sysPrompt = selection.PromptText
+		variantID = selection.VariantID
+	} else {
+		// Default prompts
+		sysPrompt = domain.SystemPromptUA
+		if req.Language == domain.LangEn {
+			sysPrompt = domain.SystemPromptEN
+		}
 	}
 
 	// --- 5. Stream LLM response ---
@@ -94,6 +131,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		// Use a detached context so cancellation of the HTTP request doesn't abort the DB insert
 		rec := domain.QueryRecord{
 			QueryHash:  queryHash,
+			QueryText:  req.Message,
 			Language:   req.Language,
 			ResponseMs: elapsed,
 			SourcesCnt: len(sources),
@@ -106,5 +144,6 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		Sources:   sources,
 		QueryHash: queryHash,
 		StartedAt: start,
+		VariantID: variantID,
 	}, nil
 }

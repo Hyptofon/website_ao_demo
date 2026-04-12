@@ -30,6 +30,8 @@ type IndexHandler struct {
 	pdfExtractor  *parser.PDFExtractor
 	jobsRepo      *sqlite.JobRepository
 	metaExtractor *gemini.MetadataExtractor
+	documentRepo  domain.DocumentRepo 
+	auditRepo     domain.AuditRepo   
 }
 
 // NewIndexHandler constructs the handler.
@@ -117,24 +119,28 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 // HandleAdminUpload handles POST /admin/documents/upload asynchronously.
 func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseMultipartForm(50 << 20); err != nil {
+		slog.Error("Upload: ParseMultipartForm failed", "error", err)
 		jsonError(w, "invalid_form", "Cannot parse multipart form", http.StatusBadRequest)
 		return
 	}
 
 	file, header, err := r.FormFile("file")
 	if err != nil {
+		slog.Error("Upload: FormFile 'file' missing", "error", err)
 		jsonError(w, "missing_file", "No file in request", http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
 
 	if !parser.IsSupported(header.Filename) {
+		slog.Error("Upload: Unsupported format", "filename", header.Filename)
 		jsonError(w, "invalid_type", fmt.Sprintf("Unsupported format. Supported: %s", supportedExtList()), http.StatusBadRequest)
 		return
 	}
 
 	data, err := io.ReadAll(file)
 	if err != nil {
+		slog.Error("Upload: ReadAll file failed", "error", err)
 		jsonError(w, "read_error", "Cannot read file", http.StatusInternalServerError)
 		return
 	}
@@ -150,30 +156,42 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 	}
 
 	if err := h.jobsRepo.CreateJob(r.Context(), job); err != nil {
+		slog.Error("Upload: CreateJob failed", "error", err, "jobID", jobID)
 		jsonError(w, "db_error", "Cannot create job record", http.StatusInternalServerError)
 		return
 	}
 
-	// Save to temp file for the background worker
+	// Save to permanent storage for viewing and background worker
 	ext := strings.ToLower(filepath.Ext(header.Filename))
-	tmpFile, err := os.CreateTemp("", "upload-"+jobID+"-*"+ext)
+	docsDir := filepath.Join(".", "data", "documents")
+	if err := os.MkdirAll(docsDir, 0755); err != nil {
+		slog.Error("Upload: MkdirAll docsDir failed", "error", err)
+		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
+		jsonError(w, "fs_error", "Cannot create documents directory", http.StatusInternalServerError)
+		return
+	}
+
+	savedFilepath := filepath.Join(docsDir, jobID+ext)
+	outFile, err := os.Create(savedFilepath)
 	if err != nil {
+		slog.Error("Upload: Create file failed", "error", err)
 		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
-		jsonError(w, "temp_error", "Cannot create temp file", http.StatusInternalServerError)
+		jsonError(w, "fs_error", "Cannot create permanent file", http.StatusInternalServerError)
 		return
 	}
-	defer tmpFile.Close()
+	defer outFile.Close()
 
-	if _, err := tmpFile.Write(data); err != nil {
+	if _, err := outFile.Write(data); err != nil {
 		h.jobsRepo.UpdateJobStatus(r.Context(), jobID, domain.JobStatusFailed, err)
-		jsonError(w, "write_error", "Cannot write temp file", http.StatusInternalServerError)
+		jsonError(w, "write_error", "Cannot write permanent file", http.StatusInternalServerError)
 		return
 	}
 
-	filepath := tmpFile.Name()
+	// Wait, we can't shadow filepath import if we reuse `filepath` as a variable! 
+	// Ah, the original code had `filepath := tmpFile.Name()`
 
 	// Spin background worker
-	go h.processBackgroundUpload(jobID, header.Filename, filepath)
+	go h.processBackgroundUpload(jobID, header.Filename, savedFilepath)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted) // 202 Accepted
@@ -187,9 +205,6 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 	ctx := context.Background()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
-
-	// Ensure file cleanup after processing
-	defer os.Remove(filepath)
 
 	var text string
 	var err error
@@ -248,6 +263,18 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 	_ = h.jobsRepo.UpdateChunksCount(ctx, jobID, len(chunks))
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 100, "Indexing completed")
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusCompleted, nil)
+
+	// Phase 2: Track document in SQLite for admin panel
+	if h.documentRepo != nil {
+		_ = h.documentRepo.Create(ctx, &domain.DocumentRecord{
+			ID:         jobID,
+			Filename:   originalFilename,
+			DocType:    docType,
+			Language:   domain.Language(lang),
+			ChunkCount: len(chunks),
+			UploadedBy: "admin", // Will be enriched from context in future
+		})
+	}
 }
 
 // GetJobStatus handles GET /admin/documents/jobs/{job_id}
@@ -281,7 +308,7 @@ func supportedExtList() string {
 }
 
 // HandleDeleteDocument handles DELETE /admin/documents/{document_id}.
-// Removes all chunks belonging to a document from the vector store.
+// Removes all chunks from the vector store and the document record from SQLite.
 func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	documentID := chi.URLParam(r, "document_id")
 	if documentID == "" {
@@ -289,12 +316,20 @@ func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Info("Deleting document from vector store", "document_id", documentID)
+	adminEmail := AdminEmailFromCtx(r.Context())
+	slog.Info("Deleting document", "document_id", documentID, "admin", adminEmail)
 
 	if err := h.vectorStore.DeleteByDocumentID(r.Context(), documentID); err != nil {
-		slog.Error("Failed to delete document", "document_id", documentID, "error", err)
+		slog.Error("Failed to delete document from Qdrant", "document_id", documentID, "error", err)
 		jsonError(w, "delete_error", "Failed to delete document chunks", http.StatusInternalServerError)
 		return
+	}
+
+	// Phase 2: Remove from SQLite document registry
+	if h.documentRepo != nil {
+		if err := h.documentRepo.Delete(r.Context(), documentID); err != nil {
+			slog.Warn("Document not in SQLite registry (CLI-indexed?)", "document_id", documentID)
+		}
 	}
 
 	slog.Info("Document deleted successfully", "document_id", documentID)

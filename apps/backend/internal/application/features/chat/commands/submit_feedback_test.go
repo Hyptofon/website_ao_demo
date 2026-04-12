@@ -22,6 +22,18 @@ func (m *mockAnalyticsRepo) UpdateFeedback(_ context.Context, hash string, fb do
 func (m *mockAnalyticsRepo) Summary(_ context.Context, _ int) (*domain.AnalyticsSummary, error) {
 	return &domain.AnalyticsSummary{}, nil
 }
+func (m *mockAnalyticsRepo) TopQueries(_ context.Context, _, _ int) ([]domain.TopQuery, error) {
+	return nil, nil
+}
+func (m *mockAnalyticsRepo) DailyStats(_ context.Context, _ int) ([]domain.DailyStat, error) {
+	return nil, nil
+}
+func (m *mockAnalyticsRepo) FeedbackStats(_ context.Context, _ int) (*domain.FeedbackStat, error) {
+	return &domain.FeedbackStat{}, nil
+}
+func (m *mockAnalyticsRepo) RecentQueries(_ context.Context, _, _ int) ([]domain.QueryRow, error) {
+	return nil, nil
+}
 
 func TestSubmitFeedback_ValidPositive(t *testing.T) {
 	repo := &mockAnalyticsRepo{}

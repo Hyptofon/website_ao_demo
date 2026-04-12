@@ -150,3 +150,23 @@ func (c *Client) DeleteByDocumentID(ctx context.Context, documentID string) erro
 	})
 	return err
 }
+
+// RenameDocumentPayload updates the 'document_name' payload for all points belonging to a document.
+func (c *Client) RenameDocumentPayload(ctx context.Context, documentID string, newName string) error {
+	_, err := c.conn.SetPayload(ctx, &qdrant.SetPayloadPoints{
+		CollectionName: collectionName,
+		Payload: map[string]*qdrant.Value{
+			"document_name": qdrant.NewValueString(newName),
+		},
+		PointsSelector: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Filter{
+				Filter: &qdrant.Filter{
+					Must: []*qdrant.Condition{
+						qdrant.NewMatchKeyword("document_id", documentID),
+					},
+				},
+			},
+		},
+	})
+	return err
+}

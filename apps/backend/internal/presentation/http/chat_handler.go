@@ -107,7 +107,10 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 5. Send final sources
+	// 5. Send query hash so the frontend can submit feedback with the correct key
+	writeSSEMeta(w, flusher, result.QueryHash)
+
+	// 6. Send final sources
 	writeSources(w, flusher, result.Sources)
 	fmt.Fprintf(w, "data: [DONE]\n\n")
 	flusher.Flush()
@@ -173,6 +176,12 @@ func writeSources(w http.ResponseWriter, f http.Flusher, sources []domain.Source
 	}
 	b, _ := json.Marshal(sources)
 	fmt.Fprintf(w, "event: sources\ndata: %s\n\n", b)
+	f.Flush()
+}
+
+func writeSSEMeta(w http.ResponseWriter, f http.Flusher, queryHash string) {
+	b, _ := json.Marshal(map[string]string{"query_hash": queryHash})
+	fmt.Fprintf(w, "event: meta\ndata: %s\n\n", b)
 	f.Flush()
 }
 

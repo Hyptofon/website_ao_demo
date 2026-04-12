@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"flag"
 	"fmt"
 	"log"
@@ -18,6 +17,8 @@ import (
 	"github.com/joho/godotenv"
 	"university-chatbot/backend/internal/application/features/chat/commands"
 	"university-chatbot/backend/internal/application/features/chat/queries"
+	"university-chatbot/backend/internal/infrastructure/auth"
+	"university-chatbot/backend/internal/infrastructure/cache"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
 	"university-chatbot/backend/internal/infrastructure/parser"
@@ -32,7 +33,6 @@ func main() {
 	flag.Parse()
 
 	// ── Structured Logging (Pattern #2) ──────────────────────────────────────
-	// JSON logs in production, pretty text in dev. Zero external dependencies.
 	logLevel := slog.LevelInfo
 	if os.Getenv("LOG_LEVEL") == "debug" {
 		logLevel = slog.LevelDebug
@@ -87,15 +87,31 @@ func main() {
 	defer db.Close()
 	slog.Info("SQLite ready", "path", cfg.DBPath)
 
+	// ── Infrastructure: Repositories ───────────────────────────────────────────
 	analyticsRepo, err := sqlite.NewAnalyticsRepo(db)
 	if err != nil {
 		log.Fatalf("SQLite analytics repo init: %v", err)
 	}
 	jobsRepo := sqlite.NewJobRepository(db)
+	auditRepo := sqlite.NewAuditRepo(db)
+	documentRepo := sqlite.NewDocumentRepo(db)
+	promptRepo := sqlite.NewPromptRepo(db)
+	suggestionsRepo := sqlite.NewSuggestionsRepo(db)
 
 	// ── Infrastructure: Security ───────────────────────────────────────────────
 	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
 	offTopicFilter := security.NewOffTopicFilter()
+
+	// ── Infrastructure: Cache (Phase 3 — Redis/Upstash) ────────────────────────
+	cacheStore := cache.NewCacheFromEnv(cfg.UpstashRedisURL, cfg.UpstashRedisToken)
+
+	// ── Infrastructure: Auth (Phase 2 — Google OAuth + JWT) ────────────────────
+	oauthSvc := auth.NewOAuthService(auth.OAuthConfig{
+		ClientID:     cfg.GoogleClientID,
+		ClientSecret: cfg.GoogleClientSecret,
+		RedirectURL:  cfg.OAuthRedirectURL,
+	})
+	jwtSvc := auth.NewJWTService(cfg.JWTSecret)
 
 	// ── Document processing ────────────────────────────────────────────────────
 	chunkr := chunker.NewChunker()
@@ -113,13 +129,35 @@ func main() {
 		return
 	}
 
+	// ── Application layer: Phase 3 features ──────────────────────────────────
+	promptSelector := queries.NewPromptSelector(promptRepo)
+	reranker := queries.NewReranker(geminiClient, cfg.EnableReranking)
+
 	// ── Application layer: CQRS Handlers ─────────────────────────────────────
-	askBotHandler := queries.NewAskBotHandler(qdrantClient, geminiClient, analyticsRepo)
+	askBotHandler := queries.NewAskBotHandler(qdrantClient, geminiClient, analyticsRepo).
+		WithCache(cacheStore).
+		WithPromptSelector(promptSelector).
+		WithReranker(reranker)
 	feedbackHandler := commands.NewSubmitFeedbackHandler(analyticsRepo)
 
-	// ── Presentation: HTTP Router ─────────────────────────────────────────────
+	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter)
-	router := chathttp.NewRouter(chatHttp, qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, rateLimiter, cfg.AdminToken, cfg.AllowedOrigins, db)
+	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
+	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL)
+
+	// ── Presentation: HTTP Router ─────────────────────────────────────────────
+	router := chathttp.NewRouter(chathttp.RouterDeps{
+		ChatHandler:    chatHttp,
+		AdminHandler:   adminHandler,
+		IndexHandler:   indexHandler,
+		RateLimiter:    rateLimiter,
+		AuditRepo:      auditRepo,
+		JWTService:     jwtSvc,
+		AdminToken:     cfg.AdminToken,
+		AllowedOrigins: cfg.AllowedOrigins,
+		AllowedEmails:  cfg.AdminAllowedEmails,
+		DB:             db,
+	})
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%d", cfg.Port)
@@ -132,7 +170,6 @@ func main() {
 	}
 
 	// ── Graceful Shutdown (Pattern #1) ───────────────────────────────────────
-	// Listen for SIGTERM/SIGINT in background, serve in foreground.
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 
@@ -160,29 +197,69 @@ func main() {
 // ─── Config (Pattern #3: Validated Configuration) ─────────────────────────────
 
 type config struct {
-	GeminiAPIKey    string
-	QdrantURL       string
-	QdrantAPIKey    string
-	DBPath          string
-	Port            int
-	AllowedOrigins  []string
-	AdminToken      string // Pattern #5: Admin Auth
-	RateLimitPerMin int
+	GeminiAPIKey       string
+	QdrantURL          string
+	QdrantAPIKey       string
+	DBPath             string
+	Port               int
+	AllowedOrigins     []string
+	AdminToken         string // Legacy: shared secret for admin API
+	RateLimitPerMin    int
+
+	// Phase 2: Google OAuth
+	GoogleClientID     string
+	GoogleClientSecret string
+	OAuthRedirectURL   string
+	JWTSecret          string
+	AdminAllowedEmails []string
+
+	// Phase 3: Upstash Redis
+	UpstashRedisURL    string
+	UpstashRedisToken  string
+
+	// Phase 3: Feature flags
+	EnableReranking    bool
+	FrontendURL        string
 }
 
 func loadConfig() config {
 	port, _ := strconv.Atoi(getEnvOr("PORT", "8080"))
 	rateLimit, _ := strconv.Atoi(getEnvOr("RATE_LIMIT_PER_MIN", "10"))
 
+	// Parse admin emails whitelist
+	var adminEmails []string
+	if emailsStr := os.Getenv("ADMIN_ALLOWED_EMAILS"); emailsStr != "" {
+		for _, e := range strings.Split(emailsStr, ",") {
+			if trimmed := strings.TrimSpace(e); trimmed != "" {
+				adminEmails = append(adminEmails, trimmed)
+			}
+		}
+	}
+
 	return config{
-		GeminiAPIKey:    requireEnv("GEMINI_API_KEY"),
-		QdrantURL:       getEnvOr("QDRANT_URL", "localhost"),
-		QdrantAPIKey:    os.Getenv("QDRANT_API_KEY"),
-		DBPath:          getEnvOr("DB_PATH", "./data/analytics.db"),
-		Port:            port,
-		AllowedOrigins:  strings.Split(getEnvOr("ALLOWED_ORIGINS", "http://localhost:4321,http://localhost:3000"), ","),
-		AdminToken:      getEnvOr("ADMIN_TOKEN", ""),
-		RateLimitPerMin: rateLimit,
+		GeminiAPIKey:       requireEnv("GEMINI_API_KEY"),
+		QdrantURL:          getEnvOr("QDRANT_URL", "localhost"),
+		QdrantAPIKey:       os.Getenv("QDRANT_API_KEY"),
+		DBPath:             getEnvOr("DB_PATH", "./data/analytics.db"),
+		Port:               port,
+		AllowedOrigins:     strings.Split(getEnvOr("ALLOWED_ORIGINS", "http://localhost:4321,http://localhost:3000"), ","),
+		AdminToken:         getEnvOr("ADMIN_TOKEN", ""),
+		RateLimitPerMin:    rateLimit,
+
+		// Phase 2: Google OAuth
+		GoogleClientID:     os.Getenv("GOOGLE_CLIENT_ID"),
+		GoogleClientSecret: os.Getenv("GOOGLE_CLIENT_SECRET"),
+		OAuthRedirectURL:   getEnvOr("OAUTH_REDIRECT_URL", "http://localhost:8080/admin/auth/callback"),
+		JWTSecret:          getEnvOr("JWT_SECRET", "change-me-in-production-please-32chars"),
+		AdminAllowedEmails: adminEmails,
+
+		// Phase 3: Upstash Redis
+		UpstashRedisURL:    os.Getenv("UPSTASH_REDIS_REST_URL"),
+		UpstashRedisToken:  os.Getenv("UPSTASH_REDIS_REST_TOKEN"),
+
+		// Phase 3: Feature flags
+		EnableReranking:    os.Getenv("ENABLE_RERANKING") == "true",
+		FrontendURL:        getEnvOr("FRONTEND_URL", "http://localhost:4321/admin"),
 	}
 }
 
@@ -197,8 +274,11 @@ func (c *config) Validate() error {
 	if c.RateLimitPerMin < 1 || c.RateLimitPerMin > 1000 {
 		return fmt.Errorf("RATE_LIMIT_PER_MIN must be 1-1000, got %d", c.RateLimitPerMin)
 	}
-	if c.AdminToken == "" {
-		slog.Warn("ADMIN_TOKEN is not set — admin endpoints are unprotected!")
+	if c.AdminToken == "" && c.GoogleClientID == "" {
+		slog.Warn("Neither ADMIN_TOKEN nor GOOGLE_CLIENT_ID is set — admin endpoints are unprotected!")
+	}
+	if c.JWTSecret == "change-me-in-production-please-32chars" {
+		slog.Warn("JWT_SECRET is using default value — please set a secure secret in production!")
 	}
 	return nil
 }
@@ -225,6 +305,3 @@ func extractDir(path string) string {
 	}
 	return path[:idx]
 }
-
-// Keep the sql.DB reference accessible for legacy code that may need it.
-var _ *sql.DB

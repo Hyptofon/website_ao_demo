@@ -30,6 +30,8 @@ type IndexHandler struct {
 	pdfExtractor  *parser.PDFExtractor
 	jobsRepo      *sqlite.JobRepository
 	metaExtractor *gemini.MetadataExtractor
+	documentRepo  domain.DocumentRepo 
+	auditRepo     domain.AuditRepo   
 }
 
 // NewIndexHandler constructs the handler.
@@ -248,6 +250,18 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 	_ = h.jobsRepo.UpdateChunksCount(ctx, jobID, len(chunks))
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 100, "Indexing completed")
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusCompleted, nil)
+
+	// Phase 2: Track document in SQLite for admin panel
+	if h.documentRepo != nil {
+		_ = h.documentRepo.Create(ctx, &domain.DocumentRecord{
+			ID:         jobID,
+			Filename:   originalFilename,
+			DocType:    docType,
+			Language:   domain.Language(lang),
+			ChunkCount: len(chunks),
+			UploadedBy: "admin", // Will be enriched from context in future
+		})
+	}
 }
 
 // GetJobStatus handles GET /admin/documents/jobs/{job_id}
@@ -281,7 +295,7 @@ func supportedExtList() string {
 }
 
 // HandleDeleteDocument handles DELETE /admin/documents/{document_id}.
-// Removes all chunks belonging to a document from the vector store.
+// Removes all chunks from the vector store and the document record from SQLite.
 func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Request) {
 	documentID := chi.URLParam(r, "document_id")
 	if documentID == "" {
@@ -289,12 +303,20 @@ func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	slog.Info("Deleting document from vector store", "document_id", documentID)
+	adminEmail := AdminEmailFromCtx(r.Context())
+	slog.Info("Deleting document", "document_id", documentID, "admin", adminEmail)
 
 	if err := h.vectorStore.DeleteByDocumentID(r.Context(), documentID); err != nil {
-		slog.Error("Failed to delete document", "document_id", documentID, "error", err)
+		slog.Error("Failed to delete document from Qdrant", "document_id", documentID, "error", err)
 		jsonError(w, "delete_error", "Failed to delete document chunks", http.StatusInternalServerError)
 		return
+	}
+
+	// Phase 2: Remove from SQLite document registry
+	if h.documentRepo != nil {
+		if err := h.documentRepo.Delete(r.Context(), documentID); err != nil {
+			slog.Warn("Document not in SQLite registry (CLI-indexed?)", "document_id", documentID)
+		}
 	}
 
 	slog.Info("Document deleted successfully", "document_id", documentID)

@@ -1,0 +1,181 @@
+package http
+
+import (
+	"context"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"log/slog"
+	"net/http"
+	"strings"
+
+	"university-chatbot/backend/internal/domain"
+	"university-chatbot/backend/internal/infrastructure/auth"
+)
+
+// ─── Dual Auth Middleware ────────────────────────────────────────────────────
+// Supports both JWT (Google OAuth) AND legacy Admin-Token header.
+// This ensures backward compatibility while migrating to OAuth.
+
+type contextKey string
+
+const adminEmailKey contextKey = "admin_email"
+
+// DualAuthMiddleware validates admin access via JWT token OR shared Admin-Token.
+// JWT takes priority. If neither is valid, returns 401.
+func DualAuthMiddleware(jwtSvc *auth.JWTService, adminToken string, allowedEmails []string) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// 1. Try JWT from Authorization: Bearer <token>
+			if authHeader := r.Header.Get("Authorization"); strings.HasPrefix(authHeader, "Bearer ") {
+				tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
+				claims, err := jwtSvc.ValidateToken(tokenStr)
+				if err == nil {
+					// Check email whitelist
+					if !isEmailAllowed(claims.Email, allowedEmails) {
+						jsonError(w, "forbidden", "Email not in admin whitelist", http.StatusForbidden)
+						return
+					}
+					ctx := context.WithValue(r.Context(), adminEmailKey, claims.Email)
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+				slog.Debug("JWT validation failed, trying Admin-Token", "error", err)
+			}
+
+			// 2. Fallback: X-Admin-Token header (legacy)
+			if adminToken != "" {
+				token := r.Header.Get("X-Admin-Token")
+				if token != "" && subtle.ConstantTimeCompare([]byte(token), []byte(adminToken)) == 1 {
+					ctx := context.WithValue(r.Context(), adminEmailKey, "admin@token-auth")
+					next.ServeHTTP(w, r.WithContext(ctx))
+					return
+				}
+			}
+
+			jsonError(w, "unauthorized", "Valid JWT or Admin-Token required", http.StatusUnauthorized)
+		})
+	}
+}
+
+// AdminEmailFromCtx extracts the admin email from the request context.
+func AdminEmailFromCtx(ctx context.Context) string {
+	email, _ := ctx.Value(adminEmailKey).(string)
+	if email == "" {
+		return "unknown"
+	}
+	return email
+}
+
+// isEmailAllowed checks if an email is in the whitelist.
+// Empty whitelist = allow all (for development).
+func isEmailAllowed(email string, allowed []string) bool {
+	if len(allowed) == 0 {
+		return true // no whitelist configured → allow all authenticated users
+	}
+	email = strings.ToLower(strings.TrimSpace(email))
+	for _, a := range allowed {
+		if strings.ToLower(strings.TrimSpace(a)) == email {
+			return true
+		}
+	}
+	return false
+}
+
+// ─── Audit Logging Middleware ────────────────────────────────────────────────
+
+// AuditMiddleware automatically logs admin actions based on HTTP method and path.
+func AuditMiddleware(auditRepo domain.AuditRepo) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Execute the handler first
+			next.ServeHTTP(w, r)
+
+			// Log the action asynchronously (don't slow down the response)
+			go func() {
+				action := inferAction(r.Method, r.URL.Path)
+				if action == "" {
+					return
+				}
+
+				entry := domain.AuditEntry{
+					AdminEmail: AdminEmailFromCtx(r.Context()),
+					Action:     domain.AdminAction(action),
+					Target:     r.URL.Path,
+					IP:         realIP(r),
+				}
+
+				if err := auditRepo.Record(context.Background(), entry); err != nil {
+					slog.Error("Failed to record audit entry", "error", err)
+				}
+			}()
+		})
+	}
+}
+
+// inferAction maps HTTP method + path to an admin action for auditing.
+func inferAction(method, path string) string {
+	switch {
+	case method == "POST" && strings.Contains(path, "/upload"):
+		return string(domain.ActionUploadDocument)
+	case method == "DELETE" && strings.Contains(path, "/documents/"):
+		return string(domain.ActionDeleteDocument)
+	case method == "GET" && strings.Contains(path, "/analytics"):
+		return string(domain.ActionViewAnalytics)
+	case method == "GET" && strings.Contains(path, "/audit"):
+		return string(domain.ActionViewAuditLog)
+	default:
+		return ""
+	}
+}
+
+// ─── OAuth CSRF State ────────────────────────────────────────────────────────
+
+// GenerateState creates a cryptographically random state token for OAuth CSRF protection.
+func GenerateState() string {
+	b := make([]byte, 16)
+	rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// csrfStore is a simple in-memory store for OAuth state tokens.
+// In production with multiple instances, use Redis instead.
+var csrfStore = make(map[string]bool)
+
+// StoreState saves an OAuth state token.
+func StoreState(state string) {
+	csrfStore[state] = true
+}
+
+// ValidateState checks and consumes an OAuth state token (one-time use).
+func ValidateState(state string) bool {
+	if csrfStore[state] {
+		delete(csrfStore, state)
+		return true
+	}
+	return false
+}
+
+// stateResponse is used for JSON responses in auth endpoints.
+type stateResponse struct {
+	URL   string `json:"url,omitempty"`
+	Token string `json:"token,omitempty"`
+	Email string `json:"email,omitempty"`
+	Name  string `json:"name,omitempty"`
+}
+
+// authErrorResponse wraps errors from auth endpoints.
+type authErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message"`
+}
+
+func writeAuthError(w http.ResponseWriter, msg string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(authErrorResponse{
+		Error:   "auth_error",
+		Message: msg,
+	})
+}

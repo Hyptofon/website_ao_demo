@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 
 	"university-chatbot/backend/internal/domain"
@@ -23,6 +24,7 @@ type AdminHandler struct {
 	promptRepo    domain.PromptRepo
 	suggestRepo   domain.SuggestionsRepo
 	allowedEmails []string
+	frontendURL   string // URL of the frontend admin page for OAuth redirect
 }
 
 // NewAdminHandler constructs the admin handler with all dependencies.
@@ -35,7 +37,11 @@ func NewAdminHandler(
 	promptRepo domain.PromptRepo,
 	suggestRepo domain.SuggestionsRepo,
 	allowedEmails []string,
+	frontendURL string,
 ) *AdminHandler {
+	if frontendURL == "" {
+		frontendURL = "http://localhost:4321/admin"
+	}
 	return &AdminHandler{
 		oauthSvc:      oauthSvc,
 		jwtSvc:        jwtSvc,
@@ -45,6 +51,7 @@ func NewAdminHandler(
 		promptRepo:    promptRepo,
 		suggestRepo:   suggestRepo,
 		allowedEmails: allowedEmails,
+		frontendURL:   frontendURL,
 	}
 }
 
@@ -123,12 +130,14 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Admin login successful", "email", userInfo.Email)
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(stateResponse{
-		Token: token,
-		Email: userInfo.Email,
-		Name:  userInfo.Name,
-	})
+	// Redirect to frontend admin page with token as query parameter.
+	// The frontend script extracts it and stores in localStorage.
+	redirectURL, _ := url.Parse(h.frontendURL)
+	q := redirectURL.Query()
+	q.Set("token", token)
+	redirectURL.RawQuery = q.Encode()
+
+	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 }
 
 // ─── Analytics Endpoints ────────────────────────────────────────────────────

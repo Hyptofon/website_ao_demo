@@ -143,7 +143,7 @@ func main() {
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
-	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, cfg.AdminAllowedEmails)
+	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, cfg.AdminAllowedEmails, cfg.FrontendURL)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
 	router := chathttp.NewRouter(chathttp.RouterDeps{
@@ -219,6 +219,7 @@ type config struct {
 
 	// Phase 3: Feature flags
 	EnableReranking    bool
+	FrontendURL        string
 }
 
 func loadConfig() config {
@@ -258,6 +259,7 @@ func loadConfig() config {
 
 		// Phase 3: Feature flags
 		EnableReranking:    os.Getenv("ENABLE_RERANKING") == "true",
+		FrontendURL:        getEnvOr("FRONTEND_URL", "http://localhost:4321/admin"),
 	}
 }
 

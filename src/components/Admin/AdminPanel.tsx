@@ -10,6 +10,7 @@ import { Sidebar, type Tab } from "./Sidebar";
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { QueriesTab } from "./QueriesTab";
+import { PromptsTab } from "./PromptsTab";
 import { RefreshCw } from "lucide-react";
 
 export default function AdminPanel() {
@@ -81,6 +82,7 @@ export default function AdminPanel() {
               {tab === "overview" && <OverviewTab />}
               {tab === "documents" && <DocumentsTab />}
               {tab === "queries" && <QueriesTab />}
+              {tab === "prompts" && <PromptsTab />}
             </motion.div>
           </AnimatePresence>
         </div>

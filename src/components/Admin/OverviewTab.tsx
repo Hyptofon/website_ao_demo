@@ -117,35 +117,56 @@ export function OverviewTab() {
       {daily.length > 0 && (
         <AnimatedSection i={5}>
           <GlassCard title="Запити по днях" icon={TrendingUp}>
-            <div className="flex h-48 items-end gap-0.5 pt-2">
+            {/* Chart Container with Background Grid */}
+            <div className="relative mt-2 flex h-60 w-full items-end gap-2 pt-4">
+              {/* Horizontal Grid lines */}
+              <div className="pointer-events-none absolute inset-0 flex flex-col justify-between border-y border-white/5 py-4 z-0">
+                <div className="h-px w-full bg-white/[0.03]" />
+                <div className="h-px w-full bg-white/[0.03]" />
+                <div className="h-px w-full bg-white/[0.03]" />
+                <div className="h-px w-full bg-white/[0.03]" />
+              </div>
+              
               {daily.map((d, i) => {
                 const max = Math.max(...daily.map((s) => s.total_queries), 1);
                 const pct = (d.total_queries / max) * 100;
                 return (
                   <motion.div
                     key={d.date}
-                    className="group relative flex flex-1 flex-col items-center"
+                    className="group relative z-10 flex h-full flex-1 flex-col items-center justify-end"
                     initial={{ scaleY: 0 }}
                     animate={{ scaleY: 1 }}
-                    transition={{ delay: 0.4 + i * 0.025, duration: 0.5, ease: [0.25, 0.46, 0.45, 0.94] }}
+                    transition={{ delay: 0.4 + i * 0.03, duration: 0.7, ease: [0.25, 0.46, 0.45, 0.94] }}
                     style={{ transformOrigin: "bottom" }}
                   >
-                    {/* Tooltip */}
-                    <div className="pointer-events-none absolute -top-11 z-20 hidden rounded-lg bg-zinc-800/95 px-2.5 py-1.5 text-[10px] text-zinc-200 shadow-xl ring-1 ring-white/5 group-hover:block whitespace-nowrap backdrop-blur-sm">
-                      <div className="font-medium">{d.date}</div>
-                      <div className="text-zinc-400">{d.total_queries} запитів</div>
+                    {/* Premium Tooltip */}
+                    <div className="pointer-events-none absolute -top-14 z-30 hidden flex-col items-center group-hover:flex">
+                      <div className="rounded-lg border border-white/10 bg-zinc-900/90 px-3 py-2 text-center shadow-xl backdrop-blur-md">
+                        <div className="text-[10px] font-medium text-zinc-400">{d.date}</div>
+                        <div className="text-sm font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-400 to-cyan-300">{d.total_queries} запитів</div>
+                      </div>
+                      <div className="mt-[-4px] h-2 w-2 rotate-45 border-r border-b border-white/10 bg-zinc-900/90" />
                     </div>
+
+                    {/* Bar */}
                     <div
-                      className="w-full max-w-[24px] rounded-t-md bg-gradient-to-t from-blue-600/80 to-blue-400/90 transition-all duration-200 group-hover:from-blue-500 group-hover:to-blue-300 group-hover:shadow-lg group-hover:shadow-blue-500/20"
-                      style={{ height: `${Math.max(pct, 3)}%` }}
+                      className="w-full max-w-[28px] rounded-t border-t border-white/20 bg-gradient-to-t from-indigo-900/40 via-blue-600/70 to-cyan-400/90 transition-all duration-300 group-hover:from-indigo-600/60 group-hover:via-blue-500/80 group-hover:to-cyan-300 group-hover:shadow-[0_0_15px_rgba(34,211,238,0.5)]"
+                      style={{ height: `${Math.max(pct, 2)}%` }}
                     />
-                    {i % Math.max(1, Math.floor(daily.length / 6)) === 0 && (
-                      <span className="mt-2 text-[9px] text-zinc-700 truncate max-w-[36px]">{d.date.slice(5)}</span>
+                    
+                    {/* Hover indicator line reaching to the bottom */}
+                    <div className="absolute bottom-0 w-full h-[2px] bg-cyan-400/0 transition-all duration-300 group-hover:bg-cyan-400/50" />
+                    
+                    {/* X-axis label */}
+                    {i % Math.max(1, Math.floor(daily.length / 7)) === 0 && (
+                      <span className="absolute -bottom-6 mt-3 text-[10px] font-medium text-zinc-500 group-hover:text-zinc-300 transition-colors">{d.date.slice(5)}</span>
                     )}
                   </motion.div>
                 );
               })}
             </div>
+            {/* Space for the absolute X-axis labels below the chart */}
+            <div className="h-6 w-full" />
           </GlassCard>
         </AnimatedSection>
       )}
@@ -157,9 +178,9 @@ export function OverviewTab() {
             <GlassCard title="Топ запити" icon={Users}>
               <div className="space-y-0">
                 {topQ.slice(0, 6).map((q, i) => (
-                  <div key={q.query_hash} className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 last:border-0">
+                  <div key={q.query_text} className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 last:border-0">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-zinc-800/80 text-[10px] font-bold text-zinc-500">{i + 1}</span>
-                    <span className="flex-1 truncate font-medium text-[13px] text-zinc-300" title={q.query_hash}>{q.query_hash}</span>
+                    <span className="flex-1 truncate font-medium text-[13px] text-zinc-300" title={q.query_text}>{q.query_text}</span>
                     <Badge>{q.count}×</Badge>
                   </div>
                 ))}

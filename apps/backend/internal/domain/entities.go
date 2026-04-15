@@ -190,7 +190,7 @@ type DocumentRecord struct {
 
 // TopQuery is an aggregated view of the most frequent queries.
 type TopQuery struct {
-	QueryHash string `json:"query_hash"`
+	QueryText string `json:"query_text"`
 	Count     int    `json:"count"`
 	Language  string `json:"language"`
 	LastSeen  string `json:"last_seen"` // RFC3339

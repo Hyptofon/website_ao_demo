@@ -46,7 +46,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r.Use(middleware.StripSlashes)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   deps.AllowedOrigins,
-		AllowedMethods:   []string{"GET", "POST", "DELETE", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept", "X-Admin-Token"},
 		AllowCredentials: false,
 		MaxAge:           3600,
@@ -136,6 +136,9 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			// A/B testing prompts
 			r.Get("/prompts", deps.AdminHandler.HandleListPrompts)
 			r.Post("/prompts", deps.AdminHandler.HandleCreatePrompt)
+			r.Patch("/prompts/{id}/active", deps.AdminHandler.HandleTogglePromptActive)
+			r.Patch("/prompts/{id}", deps.AdminHandler.HandleUpdatePrompt)
+			r.Delete("/prompts/{id}", deps.AdminHandler.HandleDeletePrompt)
 
 			// Suggested questions
 			r.Get("/suggestions", deps.AdminHandler.HandleListSuggestions)

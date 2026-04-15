@@ -415,6 +415,76 @@ func (h *AdminHandler) HandleCreatePrompt(w http.ResponseWriter, r *http.Request
 	json.NewEncoder(w).Encode(variant)
 }
 
+// HandleTogglePromptActive toggles is_active for a prompt.
+// PATCH /admin/prompts/{id}/active
+func (h *AdminHandler) HandleTogglePromptActive(w http.ResponseWriter, r *http.Request) {
+	promptID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid_id", "Invalid prompt ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		IsActive bool `json:"is_active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid_request", "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.promptRepo.SetActive(r.Context(), promptID, req.IsActive); err != nil {
+		jsonError(w, "db_error", "Failed to update prompt status", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// HandleUpdatePrompt updates the prompt_text.
+// PATCH /admin/prompts/{id}
+func (h *AdminHandler) HandleUpdatePrompt(w http.ResponseWriter, r *http.Request) {
+	promptID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid_id", "Invalid prompt ID", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		PromptText string `json:"prompt_text"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.PromptText == "" {
+		jsonError(w, "invalid_request", "Invalid JSON body or empty text", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.promptRepo.Update(r.Context(), promptID, req.PromptText); err != nil {
+		jsonError(w, "db_error", "Failed to update prompt", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+// HandleDeletePrompt deletes a prompt completely.
+// DELETE /admin/prompts/{id}
+func (h *AdminHandler) HandleDeletePrompt(w http.ResponseWriter, r *http.Request) {
+	promptID, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil {
+		jsonError(w, "invalid_id", "Invalid prompt ID", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.promptRepo.Delete(r.Context(), promptID); err != nil {
+		jsonError(w, "db_error", "Failed to delete prompt", http.StatusInternalServerError)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
 // ─── Suggestions Endpoints ──────────────────────────────────────────────────
 
 // HandleListSuggestions returns suggested questions for a language.

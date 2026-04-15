@@ -134,3 +134,22 @@ export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
     body: JSON.stringify(payload),
   });
 }
+
+export interface SuggestedQuestion {
+  id: number;
+  question: string;
+  language: Language;
+  is_auto: boolean;
+  priority: number;
+}
+
+export async function fetchSuggestions(language: Language): Promise<SuggestedQuestion[]> {
+  try {
+    const res = await fetch(`${API_BASE}/api/v1/suggestions?lang=${language}&limit=3`);
+    if (!res.ok) return [];
+    return await res.json() as SuggestedQuestion[];
+  } catch (err) {
+    console.error("Failed to fetch suggestions", err);
+    return [];
+  }
+}

@@ -1,25 +1,15 @@
-import { useCallback, useEffect, useState, useRef } from "react";
-import { FileText, Upload, Trash2, FileUp, Eye, PencilLine, MoreVertical } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
+import { FileText, Upload, Trash2, FileUp, Eye, PencilLine, MoreVertical, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "motion/react";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { fetchDocuments, uploadDocument, deleteDocument, renameDocument, getDocumentDownloadUrl, type DocumentRecord } from "./api";
 import { AnimatedSection, GlassCard, Badge, TabLoader, EmptyState } from "./ui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, onDelete: (id: string, n: string) => void, onRename: (id: string, oldName: string, newName: string) => void, onPreview: (id: string) => void }) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [editName, setEditName] = useState(d.filename);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    const handleClickOutside = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    if (menuOpen) document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
-  }, [menuOpen]);
 
   const handleSave = () => {
     setIsRenaming(false);
@@ -44,7 +34,7 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
       initial={{ opacity: 0, x: -8 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 8 }}
-      className="border-b border-white/[0.03] transition-colors hover:bg-white/[0.02]"
+      className="group border-b border-white/[0.04] last:border-0 hover:bg-white/[0.03] transition-colors"
     >
       <td className="flex items-center gap-2.5 px-3 py-3 font-medium text-zinc-300">
         <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-blue-500/10">
@@ -71,51 +61,46 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
       <td className="px-3 py-3 text-zinc-400 tabular-nums">{d.chunk_count}</td>
       <td className="px-3 py-3 text-xs text-zinc-600">{d.uploaded_at?.slice(0, 10) ?? "—"}</td>
       <td className="px-3 py-3 text-right">
-        <div className="relative inline-block text-left" ref={menuRef}>
-          <button
-            onClick={() => setMenuOpen(!menuOpen)}
-            className="rounded-lg p-1.5 text-zinc-500 transition-all hover:bg-white/5 hover:text-zinc-300 focus:outline-none"
-          >
-            <MoreVertical size={16} />
-          </button>
+        <DropdownMenu.Root>
+          <DropdownMenu.Trigger asChild>
+            <button className="rounded-lg p-1.5 text-zinc-500 transition-all hover:bg-white/10 hover:text-zinc-200 focus:outline-none focus:ring-2 focus:ring-blue-500/50 data-[state=open]:bg-white/10 data-[state=open]:text-zinc-200">
+              <MoreVertical size={16} />
+            </button>
+          </DropdownMenu.Trigger>
           
-          <AnimatePresence>
-            {menuOpen && (
-              <motion.div
-                initial={{ opacity: 0, scale: 0.95, y: -5 }}
-                animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.95, y: -5 }}
-                transition={{ duration: 0.15 }}
-                className="absolute right-0 top-full z-50 mt-1 w-48 overflow-hidden rounded-xl border border-white/10 bg-zinc-900/95 shadow-xl backdrop-blur-xl"
+          <DropdownMenu.Portal>
+            <DropdownMenu.Content
+              sideOffset={5}
+              align="end"
+              className="z-50 min-w-[200px] overflow-hidden rounded-xl border border-white/10 bg-zinc-950/80 p-1.5 shadow-[0_15px_40px_-10px_rgba(0,0,0,0.8)] backdrop-blur-2xl ring-1 ring-white/5 origin-top-right will-change-transform data-[state=open]:fade-in data-[state=closed]:fade-out data-[state=open]:zoom-in-95 data-[state=closed]:zoom-out-95"
+            >
+              <DropdownMenu.Item
+                onSelect={() => onPreview(d.id)}
+                className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-300 outline-none transition-colors data-[highlighted]:bg-white/10 data-[highlighted]:text-white"
               >
-                <div className="flex flex-col p-1">
-                  <button
-                    onClick={() => { setMenuOpen(false); onPreview(d.id); }}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5"
-                  >
-                    <Eye size={15} className="text-blue-400" />
-                    Переглянути
-                  </button>
-                  <button
-                    onClick={() => { setMenuOpen(false); setIsRenaming(true); }}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-zinc-300 transition-colors hover:bg-white/5"
-                  >
-                    <PencilLine size={15} className="text-yellow-500" />
-                    Перейменувати
-                  </button>
-                  <div className="my-1 h-px w-full bg-white/5" />
-                  <button
-                    onClick={() => { setMenuOpen(false); onDelete(d.id, d.filename); }}
-                    className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-red-400 transition-colors hover:bg-red-500/10"
-                  >
-                    <Trash2 size={15} />
-                    Видалити
-                  </button>
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-        </div>
+                <Eye size={15} className="text-blue-400" />
+                Переглянути
+              </DropdownMenu.Item>
+              <DropdownMenu.Item
+                onSelect={() => setIsRenaming(true)}
+                className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-300 outline-none transition-colors data-[highlighted]:bg-white/10 data-[highlighted]:text-white"
+              >
+                <PencilLine size={15} className="text-amber-400" />
+                Перейменувати
+              </DropdownMenu.Item>
+              
+              <DropdownMenu.Separator className="my-1.5 h-px w-full bg-white/10" />
+              
+              <DropdownMenu.Item
+                onSelect={() => setTimeout(() => onDelete(d.id, d.filename), 0)}
+                className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-red-400 outline-none transition-colors data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-300"
+              >
+                <Trash2 size={15} />
+                Видалити
+              </DropdownMenu.Item>
+            </DropdownMenu.Content>
+          </DropdownMenu.Portal>
+        </DropdownMenu.Root>
       </td>
     </motion.tr>
   );
@@ -126,6 +111,11 @@ export function DocumentsTab() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  
+  // Delete Modal State
+  const [deleteTarget, setDeleteTarget] = useState<{id: string, name: string} | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -161,17 +151,28 @@ export function DocumentsTab() {
     if (file) await doUpload(file);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Видалити "${name}"?`)) return;
-    try {
-      await deleteDocument(id);
-      setDocs((prev) => prev.filter((d) => d.id !== id));
-      toast.success(`${name} видалено`);
-    } catch { toast.error("Помилка видалення"); }
+  const handleDelete = (id: string, name: string) => {
+    setDeleteTarget({ id, name });
+    setDeleteOpen(true);
   };
 
-  const handleRename = async (id: string, currentName: string) => {
-    const newName = prompt("Введіть нову назву для документу:", currentName);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    try {
+      await deleteDocument(deleteTarget.id);
+      setDocs((prev) => prev.filter((d) => d.id !== deleteTarget.id));
+      toast.success(`${deleteTarget.name} видалено`);
+      setDeleteOpen(false);
+      setTimeout(() => load(), 300);
+    } catch { 
+      toast.error("Помилка видалення"); 
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleRename = async (id: string, currentName: string, newName?: string) => {
     if (!newName || newName === currentName) return;
     try {
       await renameDocument(id, newName);
@@ -292,6 +293,39 @@ export function DocumentsTab() {
           </GlassCard>
         </AnimatedSection>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="border-red-500/20 bg-[#0e1114] sm:max-w-[400px] shadow-2xl shadow-rose-900/10 backdrop-blur-3xl">
+          <DialogHeader className="mb-2">
+            <DialogTitle className="text-xl font-bold flex flex-col items-center gap-3 text-center text-rose-500">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center">
+                <AlertTriangle size={24} className="text-rose-500" />
+              </div>
+              Видалення документу
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-center text-sm text-zinc-400 mb-6">
+            Ви впевнені, що хочете безповоротно видалити <span className="font-bold text-zinc-200">"{deleteTarget?.name}"</span> з бази знань? 
+            Бот більше не зможе читати цей файл.
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => setDeleteOpen(false)}
+              className="flex-1 py-2.5 rounded-xl text-sm font-medium text-zinc-400 bg-zinc-800/50 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              Скасувати
+            </button>
+            <button 
+              onClick={confirmDelete} 
+              disabled={deleteLoading} 
+              className="flex-1 inline-flex justify-center items-center gap-2 rounded-xl bg-rose-500 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-rose-500/20 transition-all hover:bg-rose-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {deleteLoading ? <Loader2 className="animate-spin" size={16} /> : "Видалити"}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

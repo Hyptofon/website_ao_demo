@@ -67,7 +67,7 @@ export function StatCard({
 }: {
   icon: LucideIcon;
   label: string;
-  value: string | number;
+  value: ReactNode;
   accent?: string;
   subtitle?: string;
 }) {

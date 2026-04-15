@@ -178,9 +178,9 @@ export function OverviewTab() {
             <GlassCard title="Топ запити" icon={Users}>
               <div className="space-y-0">
                 {topQ.slice(0, 6).map((q, i) => (
-                  <div key={q.query_hash} className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 last:border-0">
+                  <div key={q.query_text} className="flex items-center gap-3 border-b border-white/[0.04] py-2.5 last:border-0">
                     <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-zinc-800/80 text-[10px] font-bold text-zinc-500">{i + 1}</span>
-                    <span className="flex-1 truncate font-medium text-[13px] text-zinc-300" title={q.query_hash}>{q.query_hash}</span>
+                    <span className="flex-1 truncate font-medium text-[13px] text-zinc-300" title={q.query_text}>{q.query_text}</span>
                     <Badge>{q.count}×</Badge>
                   </div>
                 ))}

@@ -670,3 +670,39 @@
     right: 20px;
   }
 }
+
+/* ── Suggestions ── */
+.cb-suggestions {
+  display: flex;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  gap: 8px;
+  padding: 0 14px 10px;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none; /* Firefox */
+  background: var(--cb-surface);
+}
+
+.cb-suggestions::-webkit-scrollbar {
+  display: none; /* Safari and Chrome */
+}
+
+.cb-suggestion-chip {
+  background: var(--cb-surface-2);
+  border: 1px solid var(--cb-border);
+  border-radius: 16px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--cb-text-primary);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s ease;
+  font-family: var(--cb-font);
+  flex-shrink: 0;
+}
+
+.cb-suggestion-chip:hover {
+  background: var(--cb-primary-light);
+  color: var(--cb-primary-dark);
+  border-color: var(--cb-primary);
+}

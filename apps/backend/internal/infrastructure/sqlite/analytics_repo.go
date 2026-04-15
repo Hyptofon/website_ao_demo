@@ -119,7 +119,7 @@ func (r *AnalyticsRepo) TopQueries(ctx context.Context, days, limit int) ([]doma
 	var results []domain.TopQuery
 	for rows.Next() {
 		var q domain.TopQuery
-		if err := rows.Scan(&q.QueryHash, &q.Count, &q.Language, &q.LastSeen); err != nil {
+		if err := rows.Scan(&q.QueryText, &q.Count, &q.Language, &q.LastSeen); err != nil {
 			return nil, fmt.Errorf("sqlite: scan top query: %w", err)
 		}
 		results = append(results, q)

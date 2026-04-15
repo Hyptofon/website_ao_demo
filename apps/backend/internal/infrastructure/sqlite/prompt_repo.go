@@ -82,6 +82,18 @@ func (r *PromptRepo) SetActive(ctx context.Context, id int64, active bool) error
 	return err
 }
 
+// Update modifies the text of a prompt variant.
+func (r *PromptRepo) Update(ctx context.Context, id int64, text string) error {
+	_, err := r.db.ExecContext(ctx, "UPDATE prompt_variants SET prompt_text = ? WHERE id = ?", text, id)
+	return err
+}
+
+// Delete removes a prompt variant.
+func (r *PromptRepo) Delete(ctx context.Context, id int64) error {
+	_, err := r.db.ExecContext(ctx, "DELETE FROM prompt_variants WHERE id = ?", id)
+	return err
+}
+
 func scanVariants(rows *sql.Rows) ([]domain.PromptVariant, error) {
 	var variants []domain.PromptVariant
 	for rows.Next() {

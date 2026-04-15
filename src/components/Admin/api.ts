@@ -22,7 +22,7 @@ export interface DailyStat {
 }
 
 export interface TopQuery {
-  query_hash: string;
+  query_text: string;
   count: number;
   language: string;
   last_seen: string;
@@ -71,6 +71,16 @@ export interface QueryRow {
   feedback: number;
   is_blocked: number;
   created_at: string;
+}
+
+export interface PromptVariant {
+  id: number;
+  name: string;
+  language: string;
+  prompt_text: string;
+  is_active: boolean;
+  usage_count: number;
+  avg_score: number;
 }
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
@@ -158,3 +168,20 @@ export const renameDocument = (id: string, newName: string) => api<unknown>(`/ad
 });
 
 export const getDocumentDownloadUrl = (id: string) => `${API_BASE}/admin/documents/${id}/download`;
+
+export const fetchPrompts = () => api<PromptVariant[]>("/admin/prompts");
+export const createPrompt = (prompt: Partial<PromptVariant>) => api<unknown>("/admin/prompts", {
+  method: "POST",
+  body: JSON.stringify(prompt),
+});
+export const togglePromptActive = (id: number, isActive: boolean) => api<unknown>(`/admin/prompts/${id}/active`, {
+  method: "PATCH",
+  body: JSON.stringify({ is_active: isActive }),
+});
+export const updatePrompt = (id: number, promptText: string) => api<unknown>(`/admin/prompts/${id}`, {
+  method: "PATCH",
+  body: JSON.stringify({ prompt_text: promptText }),
+});
+export const deletePrompt = (id: number) => api<unknown>(`/admin/prompts/${id}`, {
+  method: "DELETE",
+});

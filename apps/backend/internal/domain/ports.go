@@ -141,6 +141,12 @@ type PromptRepo interface {
 
 	// SetActive toggles the is_active flag.
 	SetActive(ctx context.Context, id int64, active bool) error
+
+	// Update modifies the text of a prompt variant.
+	Update(ctx context.Context, id int64, text string) error
+
+	// Delete removes a prompt variant.
+	Delete(ctx context.Context, id int64) error
 }
 
 // SuggestionsRepo manages suggested questions.

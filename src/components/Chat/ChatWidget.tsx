@@ -1,7 +1,7 @@
 "use client";
 import { useState, useCallback, useRef, useEffect } from "react";
-import type { Language, Source } from "./api";
-import { streamChat } from "./api";
+import type { Language, Source, SuggestedQuestion } from "./api";
+import { streamChat, fetchSuggestions } from "./api";
 import type { ChatMessage } from "./types";
 import { generateId } from "./types";
 import { MessageList } from "./MessageList";
@@ -27,27 +27,35 @@ export default function ChatWidget() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof window !== "undefined") {
-      return (localStorage.getItem(STORAGE_KEY_LANG) as Language) ?? "uk";
+      const stored = localStorage.getItem(STORAGE_KEY_LANG);
+      if (stored) return stored as Language;
+      
+      // Auto-detect if no stored preference
+      const browserLang = navigator.language.toLowerCase();
+      if (browserLang.startsWith("uk") || browserLang.startsWith("ru")) return "uk";
+      return "en";
     }
     return "uk";
   });
   const [rateLimit, setRateLimit] = useState<RateLimitState>({ blocked: false, retryAfterSec: 0 });
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [suggestions, setSuggestions] = useState<SuggestedQuestion[]>([]);
 
-  const sessionId = useRef(() => {
-    if (typeof window !== "undefined") {
-      const stored = sessionStorage.getItem("cb_session_id");
-      if (stored) return stored;
-      const id = generateId();
-      sessionStorage.setItem("cb_session_id", id);
-      return id;
-    }
-    return generateId();
-  });
-  // Resolve lazy initializer once
+  const sessionIdRef = useRef<string | null>(null);
   const getSessionId = () => {
-    if (typeof sessionId.current === "function") sessionId.current = sessionId.current();
-    return sessionId.current as string;
+    if (!sessionIdRef.current) {
+      if (typeof window !== "undefined") {
+        const stored = sessionStorage.getItem("cb_session_id");
+        if (stored) sessionIdRef.current = stored;
+        else {
+          sessionIdRef.current = generateId();
+          sessionStorage.setItem("cb_session_id", sessionIdRef.current);
+        }
+      } else {
+        sessionIdRef.current = generateId();
+      }
+    }
+    return sessionIdRef.current;
   };
   const abortRef = useRef<AbortController | null>(null);
   const rateLimitTimer = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -72,6 +80,15 @@ export default function ChatWidget() {
     localStorage.setItem(STORAGE_KEY_LANG, lang);
   };
 
+  // Fetch suggestions
+  useEffect(() => {
+    let active = true;
+    fetchSuggestions(language).then((res) => {
+      if (active) setSuggestions(res);
+    }).catch(console.error);
+    return () => { active = false; };
+  }, [language]);
+
   // Rate limit countdown
   useEffect(() => {
     if (!rateLimit.blocked) return;
@@ -88,8 +105,8 @@ export default function ChatWidget() {
     return () => clearInterval(rateLimitTimer.current!);
   }, [rateLimit.blocked]);
 
-  const handleSubmit = useCallback(() => {
-    const text = inputValue.trim();
+  const handleSubmit = useCallback((overrideText?: string) => {
+    const text = (overrideText ?? inputValue).trim();
     if (!text || isLoading || rateLimit.blocked) return;
 
     setErrorMsg(null);
@@ -180,7 +197,7 @@ export default function ChatWidget() {
   const handleNewConversation = () => {
     if (abortRef.current) abortRef.current.abort();
     const newId = generateId();
-    sessionId.current = newId;
+    sessionIdRef.current = newId;
     sessionStorage.setItem("cb_session_id", newId);
     setMessages([
       {
@@ -308,11 +325,26 @@ export default function ChatWidget() {
           onFeedback={handleFeedback}
         />
 
+        {/* Suggestions */}
+        {!isLoading && messages.length <= 1 && suggestions.length > 0 && (
+          <div className="cb-suggestions">
+            {suggestions.map((s) => (
+              <button 
+                key={s.id} 
+                className="cb-suggestion-chip"
+                onClick={() => handleSubmit(s.question)}
+              >
+                {s.question}
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* Input */}
         <MessageInput
           value={inputValue}
           onChange={setInputValue}
-          onSubmit={handleSubmit}
+          onSubmit={() => handleSubmit()}
           isLoading={isLoading}
           language={language}
         />

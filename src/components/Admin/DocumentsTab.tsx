@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Upload, Trash2, FileUp, Eye, PencilLine, MoreVertical } from "lucide-react";
+import { FileText, Upload, Trash2, FileUp, Eye, PencilLine, MoreVertical, AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "motion/react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import { fetchDocuments, uploadDocument, deleteDocument, renameDocument, getDocumentDownloadUrl, type DocumentRecord } from "./api";
 import { AnimatedSection, GlassCard, Badge, TabLoader, EmptyState } from "./ui";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, onDelete: (id: string, n: string) => void, onRename: (id: string, oldName: string, newName: string) => void, onPreview: (id: string) => void }) {
   const [isRenaming, setIsRenaming] = useState(false);
@@ -91,7 +92,7 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
               <DropdownMenu.Separator className="my-1.5 h-px w-full bg-white/10" />
               
               <DropdownMenu.Item
-                onSelect={() => onDelete(d.id, d.filename)}
+                onSelect={() => setTimeout(() => onDelete(d.id, d.filename), 0)}
                 className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-red-400 outline-none transition-colors data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-300"
               >
                 <Trash2 size={15} />
@@ -110,6 +111,11 @@ export function DocumentsTab() {
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
+  
+  // Delete Modal State
+  const [deleteTarget, setDeleteTarget] = useState<{id: string, name: string} | null>(null);
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteLoading, setDeleteLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -145,17 +151,28 @@ export function DocumentsTab() {
     if (file) await doUpload(file);
   };
 
-  const handleDelete = async (id: string, name: string) => {
-    if (!confirm(`Видалити "${name}"?`)) return;
-    try {
-      await deleteDocument(id);
-      setDocs((prev) => prev.filter((d) => d.id !== id));
-      toast.success(`${name} видалено`);
-    } catch { toast.error("Помилка видалення"); }
+  const handleDelete = (id: string, name: string) => {
+    setDeleteTarget({ id, name });
+    setDeleteOpen(true);
   };
 
-  const handleRename = async (id: string, currentName: string) => {
-    const newName = prompt("Введіть нову назву для документу:", currentName);
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteLoading(true);
+    try {
+      await deleteDocument(deleteTarget.id);
+      setDocs((prev) => prev.filter((d) => d.id !== deleteTarget.id));
+      toast.success(`${deleteTarget.name} видалено`);
+      setDeleteOpen(false);
+      setTimeout(() => load(), 300);
+    } catch { 
+      toast.error("Помилка видалення"); 
+    } finally {
+      setDeleteLoading(false);
+    }
+  };
+
+  const handleRename = async (id: string, currentName: string, newName?: string) => {
     if (!newName || newName === currentName) return;
     try {
       await renameDocument(id, newName);
@@ -276,6 +293,39 @@ export function DocumentsTab() {
           </GlassCard>
         </AnimatedSection>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
+        <DialogContent className="border-red-500/20 bg-[#0e1114] sm:max-w-[400px] shadow-2xl shadow-rose-900/10 backdrop-blur-3xl">
+          <DialogHeader className="mb-2">
+            <DialogTitle className="text-xl font-bold flex flex-col items-center gap-3 text-center text-rose-500">
+              <div className="w-12 h-12 rounded-full bg-rose-500/10 flex items-center justify-center">
+                <AlertTriangle size={24} className="text-rose-500" />
+              </div>
+              Видалення документу
+            </DialogTitle>
+          </DialogHeader>
+          <div className="text-center text-sm text-zinc-400 mb-6">
+            Ви впевнені, що хочете безповоротно видалити <span className="font-bold text-zinc-200">"{deleteTarget?.name}"</span> з бази знань? 
+            Бот більше не зможе читати цей файл.
+          </div>
+          <div className="flex gap-3">
+            <button 
+              onClick={() => setDeleteOpen(false)}
+              className="flex-1 py-2.5 rounded-xl text-sm font-medium text-zinc-400 bg-zinc-800/50 hover:text-white hover:bg-zinc-800 transition-colors"
+            >
+              Скасувати
+            </button>
+            <button 
+              onClick={confirmDelete} 
+              disabled={deleteLoading} 
+              className="flex-1 inline-flex justify-center items-center gap-2 rounded-xl bg-rose-500 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-rose-500/20 transition-all hover:bg-rose-400 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {deleteLoading ? <Loader2 className="animate-spin" size={16} /> : "Видалити"}
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

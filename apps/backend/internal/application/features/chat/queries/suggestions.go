@@ -56,7 +56,7 @@ func (h *SuggestedQuestionsHandler) RefreshAutoSuggestions(ctx context.Context, 
 			continue // Skip queries with too few occurrences
 		}
 		suggestion := &domain.SuggestedQuestion{
-			Question: q.QueryHash, // In production, resolve hash to actual query text
+			Question: q.QueryText, // Properly resolved to actual query text
 			Language: lang,
 			IsAuto:   true,
 			Priority: 100 + i, // After manual suggestions

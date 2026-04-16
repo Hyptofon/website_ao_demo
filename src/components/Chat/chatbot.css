@@ -512,6 +512,37 @@
   color: #dc2626;
 }
 
+/* ── Copy button ─────────────────────────────────────────────── */
+.cb-feedback__copy {
+  width: 28px;
+  height: 28px;
+  border: 1px solid var(--cb-border);
+  border-radius: 8px;
+  background: var(--cb-surface);
+  color: var(--cb-text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+  padding: 0;
+}
+
+.cb-feedback__copy:hover {
+  border-color: var(--cb-primary);
+  color: var(--cb-primary);
+  background: var(--cb-primary-light);
+}
+
+/* Visual separator between copy and feedback buttons */
+.cb-feedback__separator {
+  display: block;
+  width: 1px;
+  height: 16px;
+  background: var(--cb-border);
+  flex-shrink: 0;
+}
+
 /* ── Typing indicator ────────────────────────────────────────── */
 .cb-typing {
   display: flex;

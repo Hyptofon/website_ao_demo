@@ -5,6 +5,7 @@ import { MessageBubble } from "./MessageBubble";
 interface MessageListProps {
   messages: ChatMessage[];
   isLoading: boolean;
+  lang?: "uk" | "en";
   onFeedback: (messageId: string, feedback: 1 | -1) => void;
 }
 
@@ -28,7 +29,7 @@ function TypingIndicator() {
   );
 }
 
-export function MessageList({ messages, isLoading, onFeedback }: MessageListProps) {
+export function MessageList({ messages, isLoading, lang = "uk", onFeedback }: MessageListProps) {
   const bottomRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -38,7 +39,7 @@ export function MessageList({ messages, isLoading, onFeedback }: MessageListProp
   return (
     <div className="cb-messages" role="log" aria-live="polite" aria-label="Діалог з чат-ботом">
       {messages.map((msg) => (
-        <MessageBubble key={msg.id} message={msg} onFeedback={onFeedback} />
+        <MessageBubble key={msg.id} message={msg} lang={lang} onFeedback={onFeedback} />
       ))}
       {isLoading && <TypingIndicator />}
       <div ref={bottomRef} />

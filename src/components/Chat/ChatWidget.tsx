@@ -330,6 +330,7 @@ export default function ChatWidget() {
         <MessageList
           messages={messages}
           isLoading={isLoading}
+          lang={language}
           onFeedback={handleFeedback}
         />
 

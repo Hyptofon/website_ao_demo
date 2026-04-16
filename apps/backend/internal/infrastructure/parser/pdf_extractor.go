@@ -26,10 +26,11 @@ func NewPDFExtractor(client *genai.Client) *PDFExtractor {
 	return &PDFExtractor{client: client}
 }
 
-const pdfMaxRetries = 3
+const pdfMaxRetries = 5
 
 // ExtractText reads a PDF file and uses Gemini to extract all text content.
 // Wrapped with retry logic for transient API errors (503, 429).
+// Fatal errors (400 INVALID_ARGUMENT) are detected immediately without retry.
 func (p *PDFExtractor) ExtractText(ctx context.Context, path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -56,6 +57,13 @@ func (p *PDFExtractor) ExtractText(ctx context.Context, path string) (string, er
 		)
 		if err != nil {
 			lastErr = err
+
+			// Fast-fail on fatal (non-retryable) errors — no point burning time
+			// retrying an INVALID_ARGUMENT from Gemini.
+			if isFatalPDFError(err) {
+				return "", friendlyPDFError(err, path)
+			}
+
 			if !isTransientError(err) || attempt == pdfMaxRetries {
 				break
 			}
@@ -99,7 +107,76 @@ func (p *PDFExtractor) ExtractText(ctx context.Context, path string) (string, er
 		return text, nil
 	}
 
-	return "", fmt.Errorf("gemini extract pdf after %d retries: %w", pdfMaxRetries, lastErr)
+	return "", friendlyTransientError(pdfMaxRetries, lastErr)
+}
+
+// friendlyTransientError formats a retry-exhausted error into an admin-readable message.
+func friendlyTransientError(attempts int, err error) error {
+	s := ""
+	if err != nil {
+		s = err.Error()
+	}
+	switch {
+	case strings.Contains(s, "503") || strings.Contains(s, "UNAVAILABLE") || strings.Contains(s, "high demand"):
+		return fmt.Errorf(
+			"Gemini API тимчасово перевантажений (503). "+
+				"Файл у форматі PDF правильний, але сервери AI зараз недоступні. "+
+				"Спробуйте завантажити файл ще раз через 2-3 хвилини",
+		)
+	case strings.Contains(s, "429") || strings.Contains(s, "RESOURCE_EXHAUSTED"):
+		return fmt.Errorf(
+			"Перевищено ліміт запитів до Gemini API (429). "+
+				"Зачекайте кілька хвилин та спробуйте знову",
+		)
+	default:
+		return fmt.Errorf("PDF не вдалось опрацювати після %d спроб. Деталі: %v", attempts, err)
+	}
+}
+
+// INVALID_ARGUMENT (400) means the file itself is malformed/unsupported.
+func isFatalPDFError(err error) bool {
+	if err == nil {
+		return false
+	}
+	s := err.Error()
+	return strings.Contains(s, "400") ||
+		strings.Contains(s, "INVALID_ARGUMENT") ||
+		strings.Contains(s, "PERMISSION_DENIED") ||
+		strings.Contains(s, "403")
+}
+
+// friendlyPDFError maps Gemini API errors to admin-readable messages.
+func friendlyPDFError(err error, path string) error {
+	s := err.Error()
+	switch {
+	case strings.Contains(s, "no pages") || strings.Contains(s, "no_pages"):
+		return fmt.Errorf(
+			"PDF файл %q не містить жодної сторінки. "+
+				"Можливі причини: файл пошкоджений, зашифрований паролем, або це не справжній PDF. "+
+				"Спробуйте відкрити файл локально та переконатись що він читабельний",
+			fileBasename(path),
+		)
+	case strings.Contains(s, "PERMISSION_DENIED") || strings.Contains(s, "403"):
+		return fmt.Errorf(
+			"Gemini API відмовив у доступі до файлу %q (403). "+
+				"Перевірте GEMINI_API_KEY та дозволи",
+			fileBasename(path),
+		)
+	default:
+		return fmt.Errorf(
+			"неможливо обробити PDF %q: файл може бути зашифрований, пошкоджений або у непідтримуваному форматі. "+
+				"Деталі: %v",
+			fileBasename(path), err,
+		)
+	}
+}
+
+func fileBasename(path string) string {
+	parts := strings.Split(strings.ReplaceAll(path, "\\", "/"), "/")
+	if len(parts) > 0 {
+		return parts[len(parts)-1]
+	}
+	return path
 }
 
 // isTransientError checks if an error is worth retrying (503, 429, etc.).

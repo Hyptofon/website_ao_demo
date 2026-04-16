@@ -156,9 +156,17 @@ export default function ChatWidget() {
       },
       onError: (code, message) => {
         if (code === "rate_limit_exceeded") {
-          // Extract seconds from message
-          const match = message.match(/(\d+)/);
-          const secs = match ? parseInt(match[1]) : 60;
+          // Backend embeds retry_after_seconds as structured prefix: __retry:N__message
+          // Falls back to regex on the message string for backward compatibility.
+          let secs = 60;
+          const prefixMatch = message.match(/^__retry:(\d+)__(.*)$/s);
+          if (prefixMatch) {
+            secs = parseInt(prefixMatch[1], 10);
+            message = prefixMatch[2]; // strip the prefix, keep the human message
+          } else {
+            const legacyMatch = message.match(/(\d+)/);
+            if (legacyMatch) secs = parseInt(legacyMatch[1]);
+          }
           setRateLimit({ blocked: true, retryAfterSec: secs });
           setMessages((prev) => prev.filter((m) => m.id !== assistantId));
           setErrorMsg(message);

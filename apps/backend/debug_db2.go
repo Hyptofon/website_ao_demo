@@ -1,3 +1,10 @@
+//go:build ignore
+// +build ignore
+
+// debug_db2.go — one-off script to inspect analytics DB records.
+// Run manually: go run debug_db2.go
+// Excluded from `go build` and `go test ./...` by the build constraint above.
+
 package main
 
 import (

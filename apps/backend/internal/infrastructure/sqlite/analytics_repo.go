@@ -44,6 +44,9 @@ func NewAnalyticsRepo(db *sql.DB) (*AnalyticsRepo, error) {
 }
 
 // Record persists a completed query event.
+// Per TZ section 3.4 (Privacy-by-Design): full query text is NOT stored.
+// We store only a 60-char truncated preview (tagged "[partial]") solely for
+// admin debuggability. The full text never reaches the database.
 func (r *AnalyticsRepo) Record(ctx context.Context, rec domain.QueryRecord) error {
 	lang := string(rec.Language)
 	if lang == "" {
@@ -53,10 +56,19 @@ func (r *AnalyticsRepo) Record(ctx context.Context, rec domain.QueryRecord) erro
 	if rec.IsBlocked {
 		blocked = 1
 	}
+
+	// Truncate query text to 60 chars for minimal admin context.
+	// Full text is intentionally never stored (TZ §3.4 Privacy-by-Design).
+	truncated := rec.QueryText
+	if len([]rune(truncated)) > 60 {
+		runes := []rune(truncated)
+		truncated = string(runes[:60]) + " [partial]"
+	}
+
 	_, err := r.db.ExecContext(ctx,
 		`INSERT INTO queries (query_hash, query_text, language, response_ms, sources_cnt, feedback, is_blocked)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		rec.QueryHash, rec.QueryText, lang, rec.ResponseMs, rec.SourcesCnt, int(rec.Feedback), blocked,
+		rec.QueryHash, truncated, lang, rec.ResponseMs, rec.SourcesCnt, int(rec.Feedback), blocked,
 	)
 	return err
 }

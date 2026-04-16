@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Source } from "./api";
 import { submitFeedback } from "./api";
 import type { ChatMessage } from "./types";
@@ -6,8 +7,14 @@ import ReactMarkdown from 'react-markdown';
 
 interface MessageBubbleProps {
   message: ChatMessage;
+  lang?: "uk" | "en";
   onFeedback: (messageId: string, feedback: 1 | -1) => void;
 }
+
+const i18n = {
+  uk: { feedbackLabel: "Корисна відповідь?", copied: "Скопійовано!", copy: "Копіювати" },
+  en: { feedbackLabel: "Was this helpful?",   copied: "Copied!",      copy: "Copy" },
+};
 
 function ThumbsUp({ filled }: { filled: boolean }) {
   return (
@@ -27,8 +34,27 @@ function ThumbsDown({ filled }: { filled: boolean }) {
   );
 }
 
-export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
+function CopyIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
+      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+    </svg>
+  );
+}
+
+function CheckIcon() {
+  return (
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+
+export function MessageBubble({ message, lang = "uk", onFeedback }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  const [copied, setCopied] = useState(false);
+  const t = i18n[lang] ?? i18n.uk;
 
   const handleFeedback = (value: 1 | -1) => {
     if (message.feedback !== null && message.feedback !== undefined) return;
@@ -36,6 +62,16 @@ export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
       submitFeedback({ query_hash: message.queryHash, feedback: value });
     }
     onFeedback(message.id, value);
+  };
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // clipboard API may be unavailable in some contexts
+    }
   };
 
   return (
@@ -60,16 +96,28 @@ export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
         {!isUser && !message.isStreaming && message.content && (
           <div className="cb-message__footer">
             {message.sources && message.sources.length > 0 && (
-              <SourcesList sources={message.sources} />
+              <SourcesList sources={message.sources} lang={lang} />
             )}
             <div className="cb-feedback">
-              <span className="cb-feedback__label">Корисна відповідь?</span>
+              {/* Copy button */}
+              <button
+                className="cb-feedback__copy"
+                onClick={handleCopy}
+                title={copied ? t.copied : t.copy}
+                aria-label={t.copy}
+              >
+                {copied ? <CheckIcon /> : <CopyIcon />}
+              </button>
+
+              <span className="cb-feedback__separator" aria-hidden="true" />
+
+              <span className="cb-feedback__label">{t.feedbackLabel}</span>
               <button
                 className={`cb-feedback__btn ${message.feedback === 1 ? "cb-feedback__btn--active-positive" : ""}`}
                 onClick={() => handleFeedback(1)}
                 disabled={message.feedback !== null && message.feedback !== undefined}
-                title="Корисно"
-                aria-label="Позначити відповідь як корисну"
+                title={lang === "en" ? "Helpful" : "Корисно"}
+                aria-label={lang === "en" ? "Mark as helpful" : "Позначити відповідь як корисну"}
               >
                 <ThumbsUp filled={message.feedback === 1} />
               </button>
@@ -77,8 +125,8 @@ export function MessageBubble({ message, onFeedback }: MessageBubbleProps) {
                 className={`cb-feedback__btn ${message.feedback === -1 ? "cb-feedback__btn--active-negative" : ""}`}
                 onClick={() => handleFeedback(-1)}
                 disabled={message.feedback !== null && message.feedback !== undefined}
-                title="Некорисно"
-                aria-label="Позначити відповідь як некорисну"
+                title={lang === "en" ? "Not helpful" : "Некорисно"}
+                aria-label={lang === "en" ? "Mark as not helpful" : "Позначити відповідь як некорисну"}
               >
                 <ThumbsDown filled={message.feedback === -1} />
               </button>

@@ -103,7 +103,41 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		}
 	}
 
-	// --- 4. Select system prompt (Phase 3: A/B testing) ---
+	// --- 4. Guard: if no relevant context — return fallback without calling LLM ---
+	// This enforces "відповідати ВИКЛЮЧНО на основі наданих документів".
+	// When contextBuf is empty the LLM has nothing grounded to work with and
+	// would hallucinate, so we return an honest "I don't know" instead.
+	if contextBuf.Len() == 0 {
+		fallback := domain.FallbackResponseUA
+		if req.Language == domain.LangEn {
+			fallback = domain.FallbackResponseEN
+		}
+		// Stream the fallback as a single SSE token so the frontend renders it normally.
+		fallbackEscaped := strings.ReplaceAll(fallback, "\n", "\\n")
+		fmt.Fprintf(w, "data: %s\n\n", fallbackEscaped)
+		if f, ok := w.(interface{ Flush() }); ok {
+			f.Flush()
+		}
+
+		elapsed := time.Since(start).Milliseconds()
+		go func() {
+			_ = h.analytics.Record(context.Background(), domain.QueryRecord{
+				QueryHash:  queryHash,
+				Language:   req.Language,
+				ResponseMs: elapsed,
+				SourcesCnt: 0,
+				IsBlocked:  false,
+			})
+		}()
+
+		return &AskBotResult{
+			Sources:   []domain.Source{},
+			QueryHash: queryHash,
+			StartedAt: start,
+		}, nil
+	}
+
+	// --- 5. Select system prompt (Phase 3: A/B testing) ---
 	var sysPrompt string
 	var variantID int64
 
@@ -119,14 +153,14 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		}
 	}
 
-	// --- 5. Stream LLM response ---
+	// --- 6. Stream LLM response ---
 	if err := h.llm.StreamAnswer(ctx, sysPrompt, req.Message, contextBuf.String(), req.Language, w); err != nil {
 		return nil, fmt.Errorf("llm stream: %w", err)
 	}
 
 	elapsed := time.Since(start).Milliseconds()
 
-	// --- 6. Record analytics in background ---
+	// --- 7. Record analytics in background ---
 	go func() {
 		// Use a detached context so cancellation of the HTTP request doesn't abort the DB insert
 		rec := domain.QueryRecord{

@@ -7,11 +7,15 @@ apps/backend/*.db
 # ─── Go build artifacts ───────────────────────────────────────
 apps/backend/server
 apps/backend/bin/
+apps/backend/api.exe
+apps/backend/*.exe
 
 # ─── Node / Astro ────────────────────────────────────────────
 node_modules/
 dist/
 .astro/
+# Root-level .env (Astro PUBLIC_API_URL) — .env.example is tracked instead
+.env
 
 # ─── OS / IDE ────────────────────────────────────────────────
 .DS_Store

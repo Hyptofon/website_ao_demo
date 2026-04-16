@@ -2,9 +2,15 @@ import type { Source } from "./api";
 
 interface SourcesListProps {
   sources: Source[];
+  lang?: "uk" | "en";
 }
 
-export function SourcesList({ sources }: SourcesListProps) {
+const labels: Record<string, string> = {
+  uk: "Джерела:",
+  en: "Sources:",
+};
+
+export function SourcesList({ sources, lang = "uk" }: SourcesListProps) {
   if (!sources || sources.length === 0) return null;
 
   return (
@@ -17,11 +23,11 @@ export function SourcesList({ sources }: SourcesListProps) {
           <line x1="16" y1="17" x2="8" y2="17" />
           <polyline points="10 9 9 9 8 9" />
         </svg>
-        Джерела:
+        {labels[lang] ?? labels.uk}
       </span>
       <div className="cb-sources__list">
         {sources.map((src, i) => (
-          <span key={i} className="cb-sources__item" title={`Релевантність: ${(src.score * 100).toFixed(0)}%`}>
+          <span key={i} className="cb-sources__item" title={`${lang === "en" ? "Relevance" : "Релевантність"}: ${(src.score * 100).toFixed(0)}%`}>
             {src.document_name}
           </span>
         ))}

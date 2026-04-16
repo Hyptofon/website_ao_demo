@@ -52,7 +52,8 @@ export function streamChat(
         let errMsg = body;
         let errCode = "http_error";
         
-        // The backend sends errors as SSE events format: event: error\ndata: {"error":"...", "message":"..."}
+        // The backend sends errors as SSE events: event: error\ndata: {...}
+        // We prefer the explicit retry_after_seconds int field over regex-parsing the message.
         if (body.includes("data: {")) {
           const match = body.match(/data: (\{.*?\})/);
           if (match) {
@@ -60,6 +61,10 @@ export function streamChat(
               const parsed = JSON.parse(match[1]);
               if (parsed.error) errCode = parsed.error;
               if (parsed.message) errMsg = parsed.message;
+              // Backend now sends retry_after_seconds as an integer — use it directly.
+              if (typeof parsed.retry_after_seconds === "number") {
+                errMsg = `__retry:${parsed.retry_after_seconds}__${errMsg}`;
+              }
             } catch {}
           }
         }

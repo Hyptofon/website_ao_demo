@@ -1,3 +1,10 @@
+//go:build ignore
+// +build ignore
+
+// debug_admin.go — one-off script to inspect the documents table.
+// Run manually: go run debug_admin.go
+// Excluded from `go build` and `go test ./...` by the build constraint above.
+
 package main
 
 import (

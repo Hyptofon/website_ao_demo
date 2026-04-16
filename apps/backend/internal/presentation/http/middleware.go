@@ -17,22 +17,28 @@ func RateLimitMiddleware(rl *security.RateLimiter) func(http.Handler) http.Handl
 			allowed, retryAfter := rl.Allow(ip, 1) // Base weight is 1
 			if !allowed {
 				secs := int(retryAfter.Seconds())
-				// Since we don't know the requested language before parsing the body, we default.
-				// However, SSE responses require specific formatting.
+				// Provide both a human-readable message AND a machine-readable integer
+				// so the frontend countdown timer can use retry_after_seconds directly
+				// instead of parsing the message string with a regex.
+				payload := map[string]interface{}{
+					"error":               "rate_limit_exceeded",
+					"retry_after_seconds": secs,
+					"message":             fmt.Sprintf("Ви надіслали забагато запитань. Зачекайте %d сек.", secs),
+				}
+
 				if strings.Contains(r.URL.Path, "/stream") {
 					w.Header().Set("Content-Type", "text/event-stream")
 					w.WriteHeader(http.StatusTooManyRequests)
-					b, _ := json.Marshal(map[string]string{
-						"error":   "rate_limit_exceeded",
-						"message": fmt.Sprintf("Ви надіслали забагато запитань. Зачекайте %d сек.", secs),
-					})
+					b, _ := json.Marshal(payload)
 					fmt.Fprintf(w, "event: error\ndata: %s\n\n", b)
 					if f, ok := w.(http.Flusher); ok {
 						f.Flush()
 					}
 					return
 				}
-				jsonError(w, "rate_limit_exceeded", fmt.Sprintf("Too many requests. Wait %d seconds.", secs), http.StatusTooManyRequests)
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusTooManyRequests)
+				json.NewEncoder(w).Encode(payload)
 				return
 			}
 			next.ServeHTTP(w, r)

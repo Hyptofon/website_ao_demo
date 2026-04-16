@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,11 +26,12 @@ type AskBotUseCase interface {
 
 // ChatHandler handles chat-related HTTP endpoints.
 type ChatHandler struct {
-	askBot    AskBotUseCase
-	feedback  *commands.SubmitFeedbackHandler
-	rateBan   func(ip string) // Functional injection for ban capability
-	offTopic  *security.OffTopicFilter
-	validator *validators.AskBotValidator
+	askBot       AskBotUseCase
+	feedback     *commands.SubmitFeedbackHandler
+	rateBan      func(ip string) // Functional injection for ban capability
+	offTopic     *security.OffTopicFilter
+	validator    *validators.AskBotValidator
+	analyticsRepo domain.AnalyticsRepo // For recording off-topic/blocked queries
 }
 
 // NewChatHandler constructs the handler.
@@ -38,13 +40,15 @@ func NewChatHandler(
 	feedback *commands.SubmitFeedbackHandler,
 	banFunc func(ip string),
 	otf *security.OffTopicFilter,
+	analyticsRepo domain.AnalyticsRepo,
 ) *ChatHandler {
 	return &ChatHandler{
-		askBot:    askBot,
-		feedback:  feedback,
-		rateBan:   banFunc,
-		offTopic:  otf,
-		validator: validators.NewAskBotValidator(),
+		askBot:        askBot,
+		feedback:      feedback,
+		rateBan:       banFunc,
+		offTopic:      otf,
+		validator:     validators.NewAskBotValidator(),
+		analyticsRepo: analyticsRepo,
 	}
 }
 
@@ -79,7 +83,23 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 
 	// 3. Off-topic filter with side-effect (Ban/Penalty)
 	if h.offTopic.IsOffTopic(req.Message) {
-		h.rateBan(realIP(r)) // Apply penalty ban 
+		h.rateBan(realIP(r)) // Apply penalty ban
+
+		// Record blocked query in analytics so admin dashboard reflects reality.
+		// Done in a goroutine to not block the SSE response.
+		if h.analyticsRepo != nil {
+			go func() {
+				hash := sha256.Sum256([]byte(strings.TrimSpace(req.Message)))
+				queryHash := fmt.Sprintf("%x", hash[:8])
+				_ = h.analyticsRepo.Record(context.Background(), domain.QueryRecord{
+					QueryHash:  queryHash,
+					Language:   req.Language,
+					ResponseMs: 0,
+					SourcesCnt: 0,
+					IsBlocked:  true,
+				})
+			}()
+		}
 
 		offTopicMsg := domain.OffTopicResponseUA
 		if req.Language == domain.LangEn {
@@ -90,6 +110,12 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		writeSources(w, flusher, nil)
 		fmt.Fprintf(w, "data: [DONE]\n\n")
 		flusher.Flush()
+
+		slog.Info("off-topic query blocked and recorded",
+			"request_id", reqID,
+			"session_id", req.SessionID,
+			"language", req.Language,
+		)
 		return
 	}
 

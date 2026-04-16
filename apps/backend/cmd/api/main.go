@@ -141,7 +141,7 @@ func main() {
 	feedbackHandler := commands.NewSubmitFeedbackHandler(analyticsRepo)
 
 	// ── Presentation: Handlers ────────────────────────────────────────────────
-	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter)
+	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
 	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL)
 

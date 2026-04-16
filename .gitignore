@@ -7,6 +7,8 @@ apps/backend/*.db
 # ─── Go build artifacts ───────────────────────────────────────
 apps/backend/server
 apps/backend/bin/
+apps/backend/api.exe
+apps/backend/*.exe
 
 # ─── Node / Astro ────────────────────────────────────────────
 node_modules/

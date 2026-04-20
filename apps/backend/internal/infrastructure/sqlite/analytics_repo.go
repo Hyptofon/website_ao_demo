@@ -9,37 +9,15 @@ import (
 	"university-chatbot/backend/internal/domain"
 )
 
-const analyticsSchema = `
-CREATE TABLE IF NOT EXISTS queries (
-	id          INTEGER PRIMARY KEY AUTOINCREMENT,
-	query_hash  TEXT    NOT NULL,
-	language    TEXT    CHECK(language IN ('uk', 'en')) DEFAULT 'uk',
-	response_ms INTEGER NOT NULL DEFAULT 0,
-	sources_cnt INTEGER DEFAULT 0,
-	feedback    INTEGER DEFAULT 0,
-	is_blocked  INTEGER DEFAULT 0,
-	created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
-CREATE INDEX IF NOT EXISTS idx_created_at ON queries(created_at);
-CREATE INDEX IF NOT EXISTS idx_query_hash  ON queries(query_hash);
-CREATE INDEX IF NOT EXISTS idx_feedback    ON queries(feedback);
-`
-
 // AnalyticsRepo is the SQLite-backed implementation of domain.AnalyticsRepo.
 type AnalyticsRepo struct {
 	db *sql.DB
 }
 
-// NewAnalyticsRepo creates the analytics repo and runs migrations.
+// NewAnalyticsRepo creates the analytics repository.
+// The underlying 'queries' table is guaranteed to exist by the time this is called
+// because InitDB runs all versioned migrations (including v6) before constructing repos.
 func NewAnalyticsRepo(db *sql.DB) (*AnalyticsRepo, error) {
-	if _, err := db.Exec(analyticsSchema); err != nil {
-		return nil, fmt.Errorf("sqlite: migrate analytics: %w", err)
-	}
-
-	// Add query_text if it doesn't exist
-	_, _ = db.Exec(`ALTER TABLE queries ADD COLUMN query_text TEXT NOT NULL DEFAULT ""`)
-
 	return &AnalyticsRepo{db: db}, nil
 }
 

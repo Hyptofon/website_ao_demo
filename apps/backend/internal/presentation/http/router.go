@@ -21,16 +21,20 @@ import (
 // RouterDeps bundles all dependencies needed to build the HTTP router.
 // Moved from positional args to a struct to keep NewRouter readable as deps grow.
 type RouterDeps struct {
-	ChatHandler    *ChatHandler
-	AdminHandler   *AdminHandler
-	IndexHandler   *IndexHandler
-	RateLimiter    *security.RateLimiter
-	AuditRepo      domain.AuditRepo
-	JWTService     *auth.JWTService
-	AdminToken     string
-	AllowedOrigins []string
-	AllowedEmails  []string
-	DB             *sql.DB
+	ChatHandler      *ChatHandler
+	AdminHandler     *AdminHandler
+	IndexHandler     *IndexHandler
+	RateLimiter      *security.RateLimiter
+	AuditRepo        domain.AuditRepo
+	JWTService       *auth.JWTService
+	AdminToken       string
+	AllowedOrigins   []string
+	AllowedEmails    []string
+	DB               *sql.DB
+	// AdminPathSegment is a 32-char hex derived from SHA256(ADMIN_TOKEN).
+	// Used to mount the admin routes at /admin-{segment}/* instead of /admin/*,
+	// making the URL unpredictable to external parties (TZ §3.3, §4.2).
+	AdminPathSegment string
 }
 
 // NewRouter constructs the chi router with all routes and middleware.
@@ -91,14 +95,18 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		}
 	})
 
-	// ── Auth Endpoints (public — no auth middleware) ────────────────────────────
+	// ── Auth Endpoints (public — no auth middleware) ────────────────────────
+	// Mounted under the hidden admin path so the OAuth callback URL is also unpredictable.
+	adminPrefix := "/admin-" + deps.AdminPathSegment
 	if deps.AdminHandler != nil {
-		r.Get("/admin/auth/login", deps.AdminHandler.HandleLogin)
-		r.Get("/admin/auth/callback", deps.AdminHandler.HandleCallback)
+		r.Get(adminPrefix+"/auth/login", deps.AdminHandler.HandleLogin)
+		r.Get(adminPrefix+"/auth/callback", deps.AdminHandler.HandleCallback)
 	}
 
-	// ── Admin API (protected) ──────────────────────────────────────────────────
-	r.Route("/admin", func(r chi.Router) {
+	// ── Admin API (protected) ─────────────────────────────────────────────
+	// All admin routes are mounted at /admin-{randomHex32} to make the
+	// admin surface unpredictable. The path segment is derived from ADMIN_TOKEN.
+	r.Route(adminPrefix, func(r chi.Router) {
 		// Dual auth: JWT OR Admin-Token
 		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails))
 

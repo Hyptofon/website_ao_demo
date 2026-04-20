@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"log"
@@ -146,17 +148,28 @@ func main() {
 	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
+	// Derive admin path segment from ADMIN_TOKEN so the admin URL is
+	// unpredictable to external parties while remaining deterministic
+	// for the configured token value.
+	// e.g. ADMIN_TOKEN='dev-test-token-32chars-longenough'
+	//   → SHA256[:16] bytes → 32 hex chars
+	//   → backend: /admin-7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c
+	//   → frontend: http://localhost:4321/admin-7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c
+	adminPathSegment := adminPathFromToken(cfg.AdminToken)
+	slog.Info("Admin panel mounted", "path", "/admin-"+adminPathSegment)
+
 	router := chathttp.NewRouter(chathttp.RouterDeps{
-		ChatHandler:    chatHttp,
-		AdminHandler:   adminHandler,
-		IndexHandler:   indexHandler,
-		RateLimiter:    rateLimiter,
-		AuditRepo:      auditRepo,
-		JWTService:     jwtSvc,
-		AdminToken:     cfg.AdminToken,
-		AllowedOrigins: cfg.AllowedOrigins,
-		AllowedEmails:  cfg.AdminAllowedEmails,
-		DB:             db,
+		ChatHandler:      chatHttp,
+		AdminHandler:     adminHandler,
+		IndexHandler:     indexHandler,
+		RateLimiter:      rateLimiter,
+		AuditRepo:        auditRepo,
+		JWTService:       jwtSvc,
+		AdminToken:       cfg.AdminToken,
+		AllowedOrigins:   cfg.AllowedOrigins,
+		AllowedEmails:    cfg.AdminAllowedEmails,
+		DB:               db,
+		AdminPathSegment: adminPathSegment,
 	})
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
@@ -304,4 +317,22 @@ func extractDir(path string) string {
 		return "."
 	}
 	return path[:idx]
+}
+
+// adminPathFromToken derives a 32-char hex string from the ADMIN_TOKEN
+// using the first 16 bytes of its SHA-256 hash.
+// This makes the admin URL unpredictable to external parties while keeping
+// it deterministic for the configured token: any change to ADMIN_TOKEN
+// automatically changes the admin URL (no manual secret management needed).
+//
+// Example:
+//
+//	ADMIN_TOKEN="dev-test-token..." → /admin-7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c
+func adminPathFromToken(token string) string {
+	if token == "" {
+		// Fallback for dev environments without an admin token.
+		return "panel"
+	}
+	hash := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(hash[:16]) // 16 bytes = 32 hex chars
 }

@@ -1,6 +1,19 @@
 // ─── Admin Panel API Client ────────────────────────────────────────────────
+// All communication goes through this module.
+//
+// SECURITY: Admin endpoints are mounted at /admin-{segment}/* where {segment}
+// is derived from SHA256(ADMIN_TOKEN)[:16 bytes] as 32 hex chars.
+// The PUBLIC_ADMIN_PATH env var must be set at build time to match the backend.
 
 const API_BASE = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8080";
+
+// PUBLIC_ADMIN_PATH: 32-char hex segment that forms the hidden admin URL.
+// Must match adminPathFromToken(ADMIN_TOKEN) computed by the Go backend.
+// Default 'panel' matches the Go backend fallback when ADMIN_TOKEN is empty.
+const ADMIN_PATH = import.meta.env.PUBLIC_ADMIN_PATH ?? "panel";
+
+/** Full admin API prefix, e.g. /admin-04643cb4e1702d075c9ff1ca95c81950 */
+const ADMIN_BASE = `/admin-${ADMIN_PATH}`;
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -112,15 +125,19 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 
 // ─── Endpoints ──────────────────────────────────────────────────────────────
 
-export const getLoginUrl = async () => (await api<{ url: string }>("/admin/auth/login")).url;
+export const getLoginUrl = async () => (await api<{ url: string }>(`${ADMIN_BASE}/auth/login`)).url;
 
-export const fetchSummary = (days = 30) => api<AnalyticsSummary>(`/admin/analytics/summary?days=${days}`);
-export const fetchDaily = (days = 30) => api<DailyStat[]>(`/admin/analytics/daily?days=${days}`);
-export const fetchTopQueries = (days = 30, limit = 10) => api<TopQuery[]>(`/admin/analytics/top-queries?days=${days}&limit=${limit}`);
-export const fetchFeedback = (days = 30) => api<FeedbackStat>(`/admin/analytics/feedback?days=${days}`);
+export const fetchSummary = (days = 30) => api<AnalyticsSummary>(`${ADMIN_BASE}/analytics/summary?days=${days}`);
+export const fetchDaily = (days = 30) => api<DailyStat[]>(`${ADMIN_BASE}/analytics/daily?days=${days}`);
+export const fetchTopQueries = (days = 30, limit = 10) => api<TopQuery[]>(`${ADMIN_BASE}/analytics/top-queries?days=${days}&limit=${limit}`);
+export const fetchFeedback = (days = 30) => api<FeedbackStat>(`${ADMIN_BASE}/analytics/feedback?days=${days}`);
 
-export const fetchDocuments = () => api<DocumentRecord[]>("/admin/documents");
-export const deleteDocument = (id: string) => api<unknown>(`/admin/documents/${id}`, { method: "DELETE" });
+export const fetchDocuments = () => api<DocumentRecord[]>(`${ADMIN_BASE}/documents`);
+export const deleteDocument = (id: string) => api<unknown>(`${ADMIN_BASE}/documents/${id}`, { method: "DELETE" });
+
+// Fix #13: uploadDocument polling now has a 5-minute timeout to prevent
+// infinite polling when a job gets stuck in a pending/processing state.
+const UPLOAD_POLL_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 export const uploadDocument = async (file: File) => {
   const token = getToken();
@@ -129,16 +146,26 @@ export const uploadDocument = async (file: File) => {
   const h: Record<string, string> = {};
   if (token) h["Authorization"] = `Bearer ${token}`;
   
-  const uploadRes = await fetch(`${API_BASE}/admin/documents/upload`, { method: "POST", headers: h, body: fd });
+  const uploadRes = await fetch(`${API_BASE}${ADMIN_BASE}/documents/upload`, { method: "POST", headers: h, body: fd });
   if (!uploadRes.ok) throw new Error(await uploadRes.text());
   
   const { job_id } = await uploadRes.json() as { job_id: string };
 
-  // Poll for completion
+  // Poll for job completion with a hard timeout.
   return new Promise<void>((resolve, reject) => {
+    const startedAt = Date.now();
+
     const check = async () => {
+      // Guard: abort if we've been polling for more than 5 minutes
+      if (Date.now() - startedAt > UPLOAD_POLL_TIMEOUT_MS) {
+        reject(new Error(
+          "Час очікування закінчився (5 хв). Перевірте документи — файл міг завантажитися успішно."
+        ));
+        return;
+      }
+
       try {
-        const jobRes = await fetch(`${API_BASE}/admin/documents/jobs/${job_id}`, { headers: h });
+        const jobRes = await fetch(`${API_BASE}${ADMIN_BASE}/documents/jobs/${job_id}`, { headers: h });
         if (!jobRes.ok) throw new Error("Failed to check status");
         
         const job = await jobRes.json() as { status: string; error: string; progress: number };
@@ -158,23 +185,23 @@ export const uploadDocument = async (file: File) => {
   });
 };
 
-export const fetchAudit = (offset = 0, limit = 5) => api<AuditResponse>(`/admin/audit?offset=${offset}&limit=${limit}`);
+export const fetchAudit = (offset = 0, limit = 5) => api<AuditResponse>(`${ADMIN_BASE}/audit?offset=${offset}&limit=${limit}`);
 
-export const fetchQueries = (days = 30, limit = 50) => api<QueryRow[]>(`/admin/queries?days=${days}&limit=${limit}`);
+export const fetchQueries = (days = 30, limit = 50) => api<QueryRow[]>(`${ADMIN_BASE}/queries?days=${days}&limit=${limit}`);
 
-export const renameDocument = (id: string, newName: string) => api<unknown>(`/admin/documents/${id}/rename`, {
+export const renameDocument = (id: string, newName: string) => api<unknown>(`${ADMIN_BASE}/documents/${id}/rename`, {
   method: "PATCH",
   body: JSON.stringify({ filename: newName }),
 });
 
-export const getDocumentDownloadUrl = (id: string) => `${API_BASE}/admin/documents/${id}/download`;
+export const getDocumentDownloadUrl = (id: string) => `${API_BASE}${ADMIN_BASE}/documents/${id}/download`;
 
-export const fetchPrompts = () => api<PromptVariant[]>("/admin/prompts");
-export const createPrompt = (prompt: Partial<PromptVariant>) => api<unknown>("/admin/prompts", {
+export const fetchPrompts = () => api<PromptVariant[]>(`${ADMIN_BASE}/prompts`);
+export const createPrompt = (prompt: Partial<PromptVariant>) => api<unknown>(`${ADMIN_BASE}/prompts`, {
   method: "POST",
   body: JSON.stringify(prompt),
 });
-export const togglePromptActive = (id: number, isActive: boolean) => api<unknown>(`/admin/prompts/${id}/active`, {
+export const togglePromptActive = (id: number, isActive: boolean) => api<unknown>(`${ADMIN_BASE}/prompts/${id}/active`, {
   method: "PATCH",
   body: JSON.stringify({ is_active: isActive }),
 });

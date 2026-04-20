@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/auth"
@@ -135,26 +137,70 @@ func inferAction(method, path string) string {
 // GenerateState creates a cryptographically random state token for OAuth CSRF protection.
 func GenerateState() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
 
-// csrfStore is a simple in-memory store for OAuth state tokens.
-// In production with multiple instances, use Redis instead.
-var csrfStore = make(map[string]bool)
+// csrfEntry holds the token value and its creation time for TTL-based cleanup.
+type csrfEntry struct {
+	createdAt time.Time
+}
 
-// StoreState saves an OAuth state token.
+// csrfStateTTL defines how long an OAuth state token is valid.
+// Google's OAuth flow typically completes well within 10 minutes.
+const csrfStateTTL = 10 * time.Minute
+
+// csrfStore is a thread-safe in-memory store for OAuth state tokens.
+// Uses RWMutex: multiple concurrent reads (ValidateState checks) are safe,
+// writes (StoreState, delete) acquire an exclusive lock.
+// In production with multiple backend instances, replace with Redis.
+var (
+	csrfStore   = make(map[string]csrfEntry)
+	csrfStoreMu sync.RWMutex
+)
+
+func init() {
+	// Background cleanup goroutine — evicts expired CSRF tokens every 5 minutes
+	// to prevent unbounded memory growth from abandoned OAuth flows.
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			csrfStoreMu.Lock()
+			cutoff := time.Now().Add(-csrfStateTTL)
+			for state, entry := range csrfStore {
+				if entry.createdAt.Before(cutoff) {
+					delete(csrfStore, state)
+				}
+			}
+			csrfStoreMu.Unlock()
+		}
+	}()
+}
+
+// StoreState saves an OAuth state token with a creation timestamp.
 func StoreState(state string) {
-	csrfStore[state] = true
+	csrfStoreMu.Lock()
+	defer csrfStoreMu.Unlock()
+	csrfStore[state] = csrfEntry{createdAt: time.Now()}
 }
 
 // ValidateState checks and consumes an OAuth state token (one-time use).
+// Returns false if the token is unknown or has expired.
 func ValidateState(state string) bool {
-	if csrfStore[state] {
-		delete(csrfStore, state)
-		return true
+	csrfStoreMu.Lock()
+	defer csrfStoreMu.Unlock()
+	entry, ok := csrfStore[state]
+	if !ok {
+		return false
 	}
-	return false
+	// Reject expired tokens even if present
+	if time.Since(entry.createdAt) > csrfStateTTL {
+		delete(csrfStore, state)
+		return false
+	}
+	delete(csrfStore, state) // one-time use
+	return true
 }
 
 // stateResponse is used for JSON responses in auth endpoints.

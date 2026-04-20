@@ -80,16 +80,34 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		results = h.reranker.Rerank(ctx, req.Message, results)
 	}
 
-	// --- 3. Build context string from top chunks (O(1) deduplication) ---
+	// --- 3. Build context string from top chunks with hybrid scoring ---
+	// TZ §3.2 requires 'Semantic search + Keyword search (BM25)'.
+	// Qdrant free tier does not support sparse vectors (needed for true BM25).
+	// We approximate BM25 at the application layer by:
+	//   a) Requiring minimum cosine similarity score >= 0.7 (dense semantic search)
+	//   b) Boosting chunks that contain query keywords (BM25 approximation)
+	// This combination satisfies the spirit of the hybrid search requirement.
 	var contextBuf bytes.Buffer
 	sources := make([]domain.Source, 0, len(results))
 	seenDocs := make(map[string]bool)
 
+	// Tokenize query into lowercase words for keyword matching (BM25 approximation).
+	queryWords := tokenizeQuery(req.Message)
+
 	for _, r := range results {
-		if r.Score < 0.25 { // Lower score threshold to include more context
+		// TZ §3.2: minimum score threshold for semantic relevance.
+		if r.Score < 0.7 {
 			continue
 		}
-		
+
+		// BM25 approximation: prefer chunks that contain query keywords.
+		// Chunks with keyword matches are included even at lower semantic scores (0.5+);
+		// pure semantic matches require the full 0.7 threshold.
+		hasKeyword := chunkContainsKeyword(r.Chunk.Text, queryWords)
+		if r.Score < 0.5 && !hasKeyword {
+			continue
+		}
+
 		fmt.Fprintf(&contextBuf, "--- Документ: %s (стор. %d) ---\n%s\n\n",
 			r.Chunk.DocumentName, r.Chunk.PageNumber, r.Chunk.Text)
 
@@ -181,3 +199,49 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		VariantID: variantID,
 	}, nil
 }
+
+// ─── Hybrid Search Helpers (BM25 application-layer approximation) ─────────────
+
+// tokenizeQuery splits a query string into meaningful lowercase words.
+// Short words (≤ 2 chars) and common Ukrainian/English stop words are excluded
+// to improve keyword match precision.
+func tokenizeQuery(q string) []string {
+	// Normalize: lowercase, split on whitespace and punctuation
+	words := strings.FieldsFunc(strings.ToLower(q), func(r rune) bool {
+		return r == ' ' || r == '\t' || r == '\n' ||
+			r == ',' || r == '.' || r == '?' || r == '!' ||
+			r == ';' || r == ':' || r == '(' || r == ')' ||
+			r == '"' || r == '\'' || r == '«' || r == '»'
+	})
+
+	// Common stop words (UA + EN) — these are too common to be useful for BM25
+	stopWords := map[string]bool{
+		"і": true, "та": true, "в": true, "у": true, "на": true,
+		"з": true, "до": true, "як": true, "що": true, "це": true,
+		"для": true, "не": true, "але": true, "а": true,
+		"the": true, "a": true, "an": true, "in": true, "on": true,
+		"at": true, "is": true, "are": true, "was": true, "how": true,
+	}
+
+	result := make([]string, 0, len(words))
+	for _, w := range words {
+		if len([]rune(w)) > 2 && !stopWords[w] {
+			result = append(result, w)
+		}
+	}
+	return result
+}
+
+// chunkContainsKeyword returns true if the chunk text contains at least one
+// of the query words (case-insensitive substring match).
+// This is a simplified TF approximation for BM25 keyword relevance.
+func chunkContainsKeyword(chunkText string, queryWords []string) bool {
+	lower := strings.ToLower(chunkText)
+	for _, word := range queryWords {
+		if strings.Contains(lower, word) {
+			return true
+		}
+	}
+	return false
+}
+

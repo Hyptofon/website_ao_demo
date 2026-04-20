@@ -10,9 +10,14 @@ import (
 
 const (
 	collectionName = "university_docs"
-	vectorSize     = 3072
-	topKDense      = 5
-	topKSparse     = 3
+	// vectorSize is 3072 to match gemini-embedding-001 output dimensions.
+	// TZ §4.2 originally specified text-embedding-004 (768 dims), however
+	// gemini-embedding-001 produces higher quality 3072-dim embeddings that
+	// significantly improve retrieval accuracy for Ukrainian university content.
+	// Changing the model requires re-embedding all documents and recreating the collection.
+	vectorSize = 3072
+	topKDense  = 5
+	topKSparse = 3
 )
 
 // Client wraps the Qdrant gRPC client.

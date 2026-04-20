@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -125,10 +126,12 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record login in audit log
+	// Record login in audit log.
+	// Use context.Background() — r.Context() is cancelled when the HTTP handler
+	// returns, which would cause the DB insert to silently fail.
 	if h.auditRepo != nil {
 		go func() {
-			_ = h.auditRepo.Record(r.Context(), domain.AuditEntry{
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
 				AdminEmail: userInfo.Email,
 				Action:     domain.ActionLogin,
 				Target:     "oauth",

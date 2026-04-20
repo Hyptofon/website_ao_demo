@@ -19,13 +19,33 @@ export default function AdminPanel() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Check for token in URL (OAuth redirect) or localStorage
-    const params = new URLSearchParams(window.location.search);
-    const urlToken = params.get("token");
+    // Extract JWT from OAuth redirect.
+    //
+    // Primary path: the backend now sends the token in the URL fragment
+    // (#token=...) to prevent it from appearing in server logs or Referer headers.
+    // The fragment is NEVER sent to any server by the browser.
+    //
+    // Fallback: also check ?token= for backward compatibility with older redirects.
+    let urlToken: string | null = null;
+
+    if (window.location.hash) {
+      const hashParams = new URLSearchParams(window.location.hash.slice(1)); // strip leading '#'
+      urlToken = hashParams.get("token");
+    }
+
+    if (!urlToken) {
+      // Backward-compat: legacy query-param path
+      const params = new URLSearchParams(window.location.search);
+      urlToken = params.get("token");
+    }
+
     if (urlToken) {
       localStorage.setItem("admin_jwt", urlToken);
-      window.history.replaceState({}, "", "/admin");
+      // Clear both fragment and query param from the address bar immediately.
+      // history.replaceState does not trigger a page reload.
+      window.history.replaceState({}, "", window.location.pathname);
     }
+
     setAuthed(!!getToken());
     setReady(true);
   }, []);

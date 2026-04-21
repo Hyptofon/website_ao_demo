@@ -41,7 +41,7 @@ export function MessageList({ messages, isLoading, lang = "uk", onFeedback }: Me
       {messages.map((msg) => (
         <MessageBubble key={msg.id} message={msg} lang={lang} onFeedback={onFeedback} />
       ))}
-      {isLoading && <TypingIndicator />}
+      {isLoading && !messages.some((m) => m.isStreaming) && <TypingIndicator />}
       <div ref={bottomRef} />
     </div>
   );

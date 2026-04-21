@@ -125,10 +125,29 @@ var migrations = []migration{
 		);
 		CREATE INDEX IF NOT EXISTS idx_suggestions_lang ON suggested_questions(language, priority);`,
 	},
+	{
+		Version:     6,
+		Description: "queries table for analytics (moved from analytics_repo inline schema)",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS queries (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			query_hash  TEXT    NOT NULL,
+			query_text  TEXT    NOT NULL DEFAULT '',
+			language    TEXT    CHECK(language IN ('uk', 'en')) DEFAULT 'uk',
+			response_ms INTEGER NOT NULL DEFAULT 0,
+			sources_cnt INTEGER DEFAULT 0,
+			feedback    INTEGER DEFAULT 0,
+			is_blocked  INTEGER DEFAULT 0,
+			created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_created_at ON queries(created_at);
+		CREATE INDEX IF NOT EXISTS idx_query_hash  ON queries(query_hash);
+		CREATE INDEX IF NOT EXISTS idx_feedback    ON queries(feedback);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {
-	// Ensure schema_version table exists
+	// Ensure schema_version table exists (outside transaction — idempotent DDL)
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
 		version INTEGER PRIMARY KEY,
 		description TEXT NOT NULL,
@@ -139,14 +158,40 @@ func runMigrations(db *sql.DB) error {
 	}
 
 	for _, m := range migrations {
+		// Check if this migration was already applied.
+		var count int
+		err := db.QueryRow(`SELECT COUNT(*) FROM schema_version WHERE version = ?`, m.Version).Scan(&count)
+		if err != nil {
+			return fmt.Errorf("check migration v%d: %w", m.Version, err)
+		}
+		if count > 0 {
+			continue // Already applied — skip
+		}
+
 		slog.Info("Applying migration", "version", m.Version, "description", m.Description)
 
-		if _, err := db.Exec(m.SQL); err != nil {
+		// Run each migration inside a transaction so a partial failure
+		// does not leave the schema in an inconsistent state.
+		tx, err := db.Begin()
+		if err != nil {
+			return fmt.Errorf("begin tx for migration v%d: %w", m.Version, err)
+		}
+
+		if _, err := tx.Exec(m.SQL); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("migration v%d (%s): %w", m.Version, m.Description, err)
 		}
 
-		if _, err := db.Exec("INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)", m.Version, m.Description); err != nil {
+		if _, err := tx.Exec(
+			"INSERT OR IGNORE INTO schema_version (version, description) VALUES (?, ?)",
+			m.Version, m.Description,
+		); err != nil {
+			_ = tx.Rollback()
 			return fmt.Errorf("record migration v%d: %w", m.Version, err)
+		}
+
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit migration v%d: %w", m.Version, err)
 		}
 	}
 

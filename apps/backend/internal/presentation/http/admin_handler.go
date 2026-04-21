@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -125,10 +126,12 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Record login in audit log
+	// Record login in audit log.
+	// Use context.Background() — r.Context() is cancelled when the HTTP handler
+	// returns, which would cause the DB insert to silently fail.
 	if h.auditRepo != nil {
 		go func() {
-			_ = h.auditRepo.Record(r.Context(), domain.AuditEntry{
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
 				AdminEmail: userInfo.Email,
 				Action:     domain.ActionLogin,
 				Target:     "oauth",
@@ -139,12 +142,23 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	slog.Info("Admin login successful", "email", userInfo.Email)
 
-	// Redirect to frontend admin page with token as query parameter.
-	// The frontend script extracts it and stores in localStorage.
-	redirectURL, _ := url.Parse(h.frontendURL)
-	q := redirectURL.Query()
-	q.Set("token", token)
-	redirectURL.RawQuery = q.Encode()
+	// Redirect to frontend admin page with the token in the URL fragment.
+	//
+	// SECURITY: We intentionally use a URL fragment (#token=...) instead of a
+	// query parameter (?token=...). Fragments are:
+	//   1. Never sent to any server (the browser strips them before sending HTTP requests)
+	//   2. Not included in server access logs
+	//   3. Not sent in the Referer header to third-party resources
+	//
+	// The frontend reads window.location.hash on mount, stores the token in
+	// localStorage, and immediately clears the fragment via history.replaceState.
+	redirectURL, err := url.Parse(h.frontendURL)
+	if err != nil {
+		slog.Error("Invalid frontend URL", "url", h.frontendURL, "error", err)
+		writeAuthError(w, "Invalid redirect URL configured", http.StatusInternalServerError)
+		return
+	}
+	redirectURL.Fragment = "token=" + token
 
 	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
 }

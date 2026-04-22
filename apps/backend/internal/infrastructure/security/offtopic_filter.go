@@ -88,8 +88,5 @@ func (f *OffTopicFilter) IsOffTopic(query string) bool {
 	return compiledOffTopicRegex.MatchString(query)
 }
 
-// OffTopicResponseUA is the canned reply in Ukrainian.
-const OffTopicResponseUA = "Вибачте, я можу відповідати виключно на питання про вступ та навчання на кафедрі. Спробуйте запитати про спеціальності, необхідні документи або умови вступу."
-
-// OffTopicResponseEN is the canned reply in English.
-const OffTopicResponseEN = "Sorry, I can only answer questions about admission and studies at the department. Try asking about specialties, required documents, or admission requirements."
+// Off-topic response strings are defined in domain/prompts.go (single source of truth).
+// Use domain.OffTopicResponseUA and domain.OffTopicResponseEN.

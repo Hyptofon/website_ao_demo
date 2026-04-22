@@ -67,6 +67,17 @@ type AnalyticsRepo interface {
 	RecentQueries(ctx context.Context, days, limit int) ([]QueryRow, error)
 }
 
+// ─── Conversation Memory ──────────────────────────────────────────────────────
+
+// ConversationMemory is the port for storing short-term chat history.
+type ConversationMemory interface {
+	// GetHistory retrieves the last 'limit' messages for a session.
+	GetHistory(ctx context.Context, sessionID string, limit int) ([]Message, error)
+
+	// AddMessage appends a message to the session's history.
+	AddMessage(ctx context.Context, sessionID string, msg Message) error
+}
+
 // AnalyticsSummary is a read-only projection for the admin dashboard.
 type AnalyticsSummary struct {
 	TotalQueries     int     `json:"total_queries"`

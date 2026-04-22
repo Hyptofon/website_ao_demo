@@ -15,6 +15,7 @@ import (
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/auth"
+	"university-chatbot/backend/internal/infrastructure/sqlite"
 )
 
 // ─── Dual Auth Middleware ────────────────────────────────────────────────────
@@ -27,7 +28,7 @@ const adminEmailKey contextKey = "admin_email"
 
 // DualAuthMiddleware validates admin access via JWT token OR shared Admin-Token.
 // JWT takes priority. If neither is valid, returns 401.
-func DualAuthMiddleware(jwtSvc *auth.JWTService, adminToken string, allowedEmails []string) func(http.Handler) http.Handler {
+func DualAuthMiddleware(jwtSvc *auth.JWTService, adminToken string, allowedEmails []string, settings *sqlite.AdminSettingsRepo) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// 1. Try JWT from Authorization: Bearer <token>
@@ -35,9 +36,9 @@ func DualAuthMiddleware(jwtSvc *auth.JWTService, adminToken string, allowedEmail
 				tokenStr := strings.TrimPrefix(authHeader, "Bearer ")
 				claims, err := jwtSvc.ValidateToken(tokenStr)
 				if err == nil {
-					// Check email whitelist
-					if !isEmailAllowed(claims.Email, allowedEmails) {
-						jsonError(w, "forbidden", "Email not in admin whitelist", http.StatusForbidden)
+					// Check access (whitelist or auto-admin)
+					if !CheckAdminAccess(r.Context(), claims.Email, allowedEmails, settings) {
+						jsonError(w, "forbidden", "Email not authorized", http.StatusForbidden)
 						return
 					}
 					ctx := context.WithValue(r.Context(), adminEmailKey, claims.Email)
@@ -71,15 +72,58 @@ func AdminEmailFromCtx(ctx context.Context) string {
 	return email
 }
 
+// CheckAdminAccess verifies if an email is authorized to access the admin panel.
+// Priority:
+// 1. Hardcoded whitelist (if configured)
+// 2. Auto-admin (first user who logs in)
+func CheckAdminAccess(ctx context.Context, email string, allowedEmails []string, settings *sqlite.AdminSettingsRepo) bool {
+	// 1. Whitelist has priority
+	if len(allowedEmails) > 0 {
+		return isEmailAllowed(email, allowedEmails)
+	}
+
+	// 2. Auto-admin logic
+	if settings != nil {
+		firstAdmin, err := settings.Get(ctx, "first_admin_email")
+		if err != nil {
+			slog.Error("Failed to get first_admin_email", "error", err)
+			return false
+		}
+		
+		if firstAdmin == "" {
+			// This is the first user! Auto-promote to admin.
+			err := settings.SetFirstAdmin(ctx, email)
+			if err != nil {
+				slog.Error("Failed to set first_admin_email", "error", err)
+				return false
+			}
+			slog.Info("Auto-promoted first user to admin", "email", email)
+			return true
+		}
+		
+		// If auto-admin is already set, only allow that specific email
+		return strings.EqualFold(email, firstAdmin)
+	}
+
+	return false
+}
+
 // isEmailAllowed checks if an email is in the whitelist.
-// Empty whitelist = allow all (for development).
+// Supports both exact email matches ("user@example.com") and domain patterns
+// ("@university.edu.ua") per TZ §3.3.
 func isEmailAllowed(email string, allowed []string) bool {
 	if len(allowed) == 0 {
-		return true // no whitelist configured → allow all authenticated users
+		return false
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	for _, a := range allowed {
-		if strings.ToLower(strings.TrimSpace(a)) == email {
+		a = strings.ToLower(strings.TrimSpace(a))
+		// Domain-based matching: "@university.edu.ua"
+		if strings.HasPrefix(a, "@") && strings.HasSuffix(email, a) {
+			return true
+		}
+		// Exact email match
+		if a == email {
 			return true
 		}
 	}

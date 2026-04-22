@@ -9,6 +9,7 @@ import (
 	"university-chatbot/backend/internal/infrastructure/auth"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
+	_ "university-chatbot/backend/internal/infrastructure/metrics" // register Prometheus metrics
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/security"
 	"university-chatbot/backend/internal/infrastructure/sqlite"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // RouterDeps bundles all dependencies needed to build the HTTP router.
@@ -31,6 +33,7 @@ type RouterDeps struct {
 	AllowedOrigins   []string
 	AllowedEmails    []string
 	DB               *sql.DB
+	AdminSettings    *sqlite.AdminSettingsRepo
 	// AdminPathSegment is a 32-char hex derived from SHA256(ADMIN_TOKEN).
 	// Used to mount the admin routes at /admin-{segment}/* instead of /admin/*,
 	// making the URL unpredictable to external parties (TZ §3.3, §4.2).
@@ -42,7 +45,6 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r := chi.NewRouter()
 
 	// ── Global middleware ──────────────────────────────────────────────────────
-	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID) // Pattern #4: Request ID tracing
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
@@ -52,7 +54,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		AllowedOrigins:   deps.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept", "X-Admin-Token"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           3600,
 	}))
 
@@ -83,6 +85,9 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		json.NewEncoder(w).Encode(checks)
 	})
 
+	// ── Prometheus Metrics (TZ §8.2) ──────────────────────────────────────────
+	r.Handle("/metrics", promhttp.Handler())
+
 	// ── Public Chat API ────────────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {
 		// Rate limit middleware applies specifically to the chat endpoints
@@ -101,6 +106,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	if deps.AdminHandler != nil {
 		r.Get(adminPrefix+"/auth/login", deps.AdminHandler.HandleLogin)
 		r.Get(adminPrefix+"/auth/callback", deps.AdminHandler.HandleCallback)
+		r.Post(adminPrefix+"/auth/refresh", deps.AdminHandler.HandleRefreshToken)
 	}
 
 	// ── Admin API (protected) ─────────────────────────────────────────────
@@ -108,7 +114,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	// admin surface unpredictable. The path segment is derived from ADMIN_TOKEN.
 	r.Route(adminPrefix, func(r chi.Router) {
 		// Dual auth: JWT OR Admin-Token
-		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails))
+		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails, deps.AdminSettings))
 
 		// Audit logging for all admin actions
 		if deps.AuditRepo != nil {
@@ -120,6 +126,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Post("/documents/upload", deps.IndexHandler.HandleAdminUpload)
 			r.Get("/documents/jobs/{job_id}", deps.IndexHandler.GetJobStatus)
 			r.Delete("/documents/{document_id}", deps.IndexHandler.HandleDeleteDocument)
+			r.Post("/documents/{document_id}/reindex", deps.IndexHandler.HandleReindexDocument)
 		}
 
 		// Admin panel endpoints
@@ -134,6 +141,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/analytics/daily", deps.AdminHandler.HandleDailyStats)
 			r.Get("/analytics/top-queries", deps.AdminHandler.HandleTopQueries)
 			r.Get("/analytics/feedback", deps.AdminHandler.HandleFeedbackStats)
+			r.Get("/analytics/export/csv", deps.AdminHandler.HandleExportCSV)
 
 			// User queries (individual rows)
 			r.Get("/queries", deps.AdminHandler.HandleRecentQueries)

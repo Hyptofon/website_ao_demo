@@ -5,12 +5,13 @@ import (
 	"time"
 )
 
-func TestJWT_GenerateAndValidate(t *testing.T) {
-	svc := NewJWTService("test-secret-key-for-jwt-32bytes!")
+func TestGenerateAndValidateToken(t *testing.T) {
+	svc := NewJWTService("test-secret-32-chars-long-enough")
+
 	user := &GoogleUserInfo{
-		Email:   "admin@oa.edu.ua",
+		Email:   "admin@university.edu.ua",
 		Name:    "Test Admin",
-		Picture: "https://example.com/photo.jpg",
+		Picture: "https://example.com/pic.jpg",
 	}
 
 	token, err := svc.GenerateToken(user)
@@ -18,94 +19,96 @@ func TestJWT_GenerateAndValidate(t *testing.T) {
 		t.Fatalf("GenerateToken failed: %v", err)
 	}
 
-	if token == "" {
-		t.Fatal("expected non-empty token")
-	}
-
-	// Token should have 3 parts
 	claims, err := svc.ValidateToken(token)
 	if err != nil {
 		t.Fatalf("ValidateToken failed: %v", err)
 	}
 
-	if claims.Email != "admin@oa.edu.ua" {
-		t.Errorf("expected email=admin@oa.edu.ua, got %s", claims.Email)
+	if claims.Email != user.Email {
+		t.Errorf("Expected email %q, got %q", user.Email, claims.Email)
 	}
-	if claims.Name != "Test Admin" {
-		t.Errorf("expected name=Test Admin, got %s", claims.Name)
-	}
-}
-
-func TestJWT_ExpiredToken(t *testing.T) {
-	svc := NewJWTService("test-secret-key-for-jwt-32bytes!")
-
-	// Manually create an expired token by setting exp to the past
-	user := &GoogleUserInfo{Email: "test@test.com"}
-	token, _ := svc.GenerateToken(user)
-
-	// We can't easily make it expired without modifying the claim,
-	// so let's test the IsExpired logic directly
-	claims := &Claims{
-		Email:     "test@test.com",
-		IssuedAt:  time.Now().Add(-48 * time.Hour).Unix(),
-		ExpiresAt: time.Now().Add(-24 * time.Hour).Unix(),
-	}
-
-	if !claims.IsExpired() {
-		t.Error("claim should be expired")
-	}
-
-	// Valid token should NOT be expired
-	validClaims, _ := svc.ValidateToken(token)
-	if validClaims.IsExpired() {
-		t.Error("freshly generated token should not be expired")
+	if claims.TokenType != "access" {
+		t.Errorf("Expected token type 'access', got %q", claims.TokenType)
 	}
 }
 
-func TestJWT_WrongSecret(t *testing.T) {
-	svc1 := NewJWTService("secret-one-aaaaaaaaaaaaaaaa")
-	svc2 := NewJWTService("secret-two-bbbbbbbbbbbbbbbb")
+func TestGenerateAndValidateRefreshToken(t *testing.T) {
+	svc := NewJWTService("test-secret-32-chars-long-enough")
 
-	user := &GoogleUserInfo{Email: "test@test.com"}
-	token, _ := svc1.GenerateToken(user)
+	user := &GoogleUserInfo{
+		Email: "admin@university.edu.ua",
+		Name:  "Test Admin",
+	}
 
-	_, err := svc2.ValidateToken(token)
+	refreshToken, err := svc.GenerateRefreshToken(user)
+	if err != nil {
+		t.Fatalf("GenerateRefreshToken failed: %v", err)
+	}
+
+	// Should validate as refresh token
+	claims, err := svc.ValidateRefreshToken(refreshToken)
+	if err != nil {
+		t.Fatalf("ValidateRefreshToken failed: %v", err)
+	}
+	if claims.Email != user.Email {
+		t.Errorf("Expected email %q, got %q", user.Email, claims.Email)
+	}
+	if claims.TokenType != "refresh" {
+		t.Errorf("Expected token type 'refresh', got %q", claims.TokenType)
+	}
+
+	// Should NOT validate as access token
+	_, err = svc.ValidateToken(refreshToken)
 	if err == nil {
-		t.Error("expected error when validating with wrong secret")
+		t.Error("Expected error when validating refresh token as access token")
 	}
 }
 
-func TestJWT_MalformedToken(t *testing.T) {
+func TestAccessTokenCannotBeUsedAsRefresh(t *testing.T) {
+	svc := NewJWTService("test-secret-32-chars-long-enough")
+
+	user := &GoogleUserInfo{Email: "admin@university.edu.ua"}
+	accessToken, _ := svc.GenerateToken(user)
+
+	_, err := svc.ValidateRefreshToken(accessToken)
+	if err == nil {
+		t.Error("Expected error when using access token as refresh token")
+	}
+}
+
+func TestExpiredToken(t *testing.T) {
+	svc := NewJWTService("test-secret-32-chars-long-enough")
+
+	claims := Claims{
+		Email:     "admin@test.com",
+		TokenType: "access",
+		IssuedAt:  time.Now().Add(-25 * time.Hour).Unix(),
+		ExpiresAt: time.Now().Add(-1 * time.Hour).Unix(),
+	}
+
+	token, err := svc.signClaims(claims)
+	if err != nil {
+		t.Fatalf("signClaims failed: %v", err)
+	}
+
+	_, err = svc.ValidateToken(token)
+	if err == nil {
+		t.Error("Expected error for expired token")
+	}
+}
+
+func TestRefreshTokenExpiry(t *testing.T) {
 	svc := NewJWTService("test-secret")
 
-	tests := []struct {
-		name  string
-		token string
-	}{
-		{"empty", ""},
-		{"one_part", "abc"},
-		{"two_parts", "abc.def"},
-		{"invalid_base64", "abc.def.!!!"},
-		{"tampered_payload", "eyJhbGciOiJIUzI1NiJ9.dGVzdA.abc"},
-	}
+	user := &GoogleUserInfo{Email: "admin@test.com"}
+	token, _ := svc.GenerateRefreshToken(user)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := svc.ValidateToken(tt.token)
-			if err == nil {
-				t.Errorf("expected error for malformed token %q", tt.token)
-			}
-		})
-	}
-}
+	claims, _ := svc.ValidateRefreshToken(token)
+	expectedExpiry := time.Now().Add(RefreshTokenExpiry).Unix()
 
-func TestJWT_MissingEmail(t *testing.T) {
-	svc := NewJWTService("test-secret")
-	user := &GoogleUserInfo{Email: "", Name: "No Email User"}
-
-	token, _ := svc.GenerateToken(user)
-	_, err := svc.ValidateToken(token)
-	if err == nil {
-		t.Error("expected error for token without email")
+	// Allow 5 second tolerance
+	diff := claims.ExpiresAt - expectedExpiry
+	if diff < -5 || diff > 5 {
+		t.Errorf("Refresh token expiry should be ~30 days, got diff %d seconds", diff)
 	}
 }

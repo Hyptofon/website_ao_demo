@@ -145,6 +145,14 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// TZ §3.5 / §6.1: MIME-type validation — check actual file content, not just extension.
+	// http.DetectContentType reads the first 512 bytes to determine the real MIME type.
+	if !validateMIMEType(data, header.Filename) {
+		slog.Warn("Upload: MIME type mismatch", "filename", header.Filename)
+		jsonError(w, "invalid_mime", "File content does not match its extension", http.StatusBadRequest)
+		return
+	}
+
 	// Create job record
 	jobIDHash := sha256.Sum256([]byte(fmt.Sprintf("%s_%d", header.Filename, time.Now().UnixNano())))
 	jobID := fmt.Sprintf("%x", jobIDHash[:8])
@@ -190,8 +198,9 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 	// Wait, we can't shadow filepath import if we reuse `filepath` as a variable! 
 	// Ah, the original code had `filepath := tmpFile.Name()`
 
-	// Spin background worker
-	go h.processBackgroundUpload(jobID, header.Filename, savedFilepath)
+	// Spin background worker — pass admin email from context for audit trail
+	adminEmail := AdminEmailFromCtx(r.Context())
+	go h.processBackgroundUpload(jobID, header.Filename, savedFilepath, adminEmail)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted) // 202 Accepted
@@ -201,7 +210,7 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath string) {
+func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath, adminEmail string) {
 	ctx := context.Background()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
@@ -272,7 +281,7 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 			DocType:    docType,
 			Language:   domain.Language(lang),
 			ChunkCount: len(chunks),
-			UploadedBy: "admin", // Will be enriched from context in future
+			UploadedBy: adminEmail,
 		})
 	}
 }
@@ -340,4 +349,84 @@ func (h *IndexHandler) HandleDeleteDocument(w http.ResponseWriter, r *http.Reque
 		"status":      "deleted",
 		"document_id": documentID,
 	})
+}
+
+// HandleReindexDocument handles POST /admin/documents/{document_id}/reindex.
+// Re-indexes a single document by deleting its existing chunks and re-processing the stored file.
+// TZ §3.3 / §4.2: re-indexation endpoint.
+func (h *IndexHandler) HandleReindexDocument(w http.ResponseWriter, r *http.Request) {
+	documentID := chi.URLParam(r, "document_id")
+	if documentID == "" {
+		jsonError(w, "missing_document_id", "document_id missing in URL", http.StatusBadRequest)
+		return
+	}
+
+	// Look up the document record to get filename and extension
+	if h.documentRepo == nil {
+		jsonError(w, "not_configured", "Document repository not configured", http.StatusInternalServerError)
+		return
+	}
+
+	doc, err := h.documentRepo.GetByID(r.Context(), documentID)
+	if err != nil {
+		jsonError(w, "not_found", "Document not found", http.StatusNotFound)
+		return
+	}
+
+	// Find the stored file on disk
+	ext := strings.ToLower(filepath.Ext(doc.Filename))
+	filePath := filepath.Join(".", "data", "documents", documentID+ext)
+	if _, err := os.Stat(filePath); os.IsNotExist(err) {
+		jsonError(w, "file_missing", "Raw file not found on disk, cannot re-index", http.StatusNotFound)
+		return
+	}
+
+	// Delete existing chunks from Qdrant
+	if err := h.vectorStore.DeleteByDocumentID(r.Context(), documentID); err != nil {
+		slog.Error("Reindex: failed to delete old chunks", "document_id", documentID, "error", err)
+		jsonError(w, "delete_error", "Failed to delete old chunks", http.StatusInternalServerError)
+		return
+	}
+
+	adminEmail := AdminEmailFromCtx(r.Context())
+
+	// Spin background re-indexing
+	go h.processBackgroundUpload(documentID, doc.Filename, filePath, adminEmail)
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]string{
+		"status":      "reindex_started",
+		"document_id": documentID,
+	})
+}
+
+// ── MIME-type validation ─────────────────────────────────────────────────────
+// TZ §3.5 / §6.1: Validate actual file content, not just extension.
+
+// allowedMIMEs maps file extensions to their expected MIME types.
+var allowedMIMEs = map[string][]string{
+	".txt":  {"text/plain"},
+	".pdf":  {"application/pdf"},
+	".docx": {"application/zip", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/octet-stream"},
+	".xlsx": {"application/zip", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"},
+}
+
+// validateMIMEType checks that the file content matches the extension's expected MIME type.
+func validateMIMEType(data []byte, filename string) bool {
+	ext := strings.ToLower(filepath.Ext(filename))
+	allowed, ok := allowedMIMEs[ext]
+	if !ok {
+		return false
+	}
+
+	detected := http.DetectContentType(data)
+	for _, mime := range allowed {
+		if strings.HasPrefix(detected, mime) {
+			return true
+		}
+	}
+
+	slog.Warn("MIME type mismatch", "filename", filename, "extension", ext, "detected", detected)
+	return false
 }

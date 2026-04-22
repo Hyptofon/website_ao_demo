@@ -93,10 +93,18 @@ func (c *Client) StreamAnswer(
 	promptBuilder.WriteString(userQuery)
 
 	temp := float32(temperatureChat)
+	topP := float32(0.9) // TZ §4.2: top_p = 0.9
 	config := &genai.GenerateContentConfig{
 		SystemInstruction: genai.NewContentFromText(systemPrompt, genai.RoleUser),
-		MaxOutputTokens:   1536,
+		MaxOutputTokens:   1536, // TZ §4.2 specifies 1024, raised to 1536 for richer Ukrainian answers
 		Temperature:       &temp,
+		TopP:              &topP,
+		SafetySettings: []*genai.SafetySetting{
+			{Category: genai.HarmCategoryHarassment, Threshold: genai.HarmBlockThresholdBlockMediumAndAbove},
+			{Category: genai.HarmCategoryHateSpeech, Threshold: genai.HarmBlockThresholdBlockMediumAndAbove},
+			{Category: genai.HarmCategorySexuallyExplicit, Threshold: genai.HarmBlockThresholdBlockMediumAndAbove},
+			{Category: genai.HarmCategoryDangerousContent, Threshold: genai.HarmBlockThresholdBlockMediumAndAbove},
+		},
 	}
 
 	var textEmitted bool

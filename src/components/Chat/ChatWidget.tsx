@@ -194,7 +194,17 @@ export default function ChatWidget() {
     });
 
     abortRef.current = ctrl;
-  }, [inputValue, isLoading, language, rateLimit.blocked]);
+  }, [inputValue, isLoading, language, rateLimit.blocked, messages]);
+
+  const handleRetry = useCallback(() => {
+    const lastUserMsg = [...messages].reverse().find(m => m.role === "user");
+    if (lastUserMsg) {
+      // Keep only messages before the failed interaction
+      const idx = messages.indexOf(lastUserMsg);
+      setMessages(messages.slice(0, idx));
+      handleSubmit(lastUserMsg.content);
+    }
+  }, [messages, handleSubmit]);
 
   const handleFeedback = useCallback((messageId: string, feedback: 1 | -1) => {
     setMessages((prev) =>
@@ -321,8 +331,15 @@ export default function ChatWidget() {
         {/* Error banner (non-rate-limit) */}
         {errorMsg && !rateLimit.blocked && (
           <div className="cb-error-banner" role="alert">
-            {errorMsg}
-            <button className="cb-error-dismiss" onClick={() => setErrorMsg(null)} aria-label="Закрити">✕</button>
+            <div className="cb-error-banner__content">
+              {errorMsg}
+            </div>
+            <div className="cb-error-banner__actions">
+              <button className="cb-error-retry" onClick={handleRetry} aria-label={language === "uk" ? "Повторити" : "Retry"}>
+                {language === "uk" ? "Повторити" : "Retry"}
+              </button>
+              <button className="cb-error-dismiss" onClick={() => setErrorMsg(null)} aria-label="Закрити">✕</button>
+            </div>
           </div>
         )}
 

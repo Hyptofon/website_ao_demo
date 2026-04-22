@@ -18,16 +18,19 @@ import (
 const (
 	// TokenExpiry is the access token lifetime.
 	TokenExpiry = 24 * time.Hour
-	jwtAlg      = "HS256"
+	// RefreshTokenExpiry is the refresh token lifetime (TZ §3.3: 30 days).
+	RefreshTokenExpiry = 30 * 24 * time.Hour
+	jwtAlg             = "HS256"
 )
 
 // Claims represents the JWT payload.
 type Claims struct {
-	Email   string `json:"email"`
-	Name    string `json:"name,omitempty"`
-	Picture string `json:"picture,omitempty"`
-	IssuedAt  int64 `json:"iat"`
-	ExpiresAt int64 `json:"exp"`
+	Email     string `json:"email"`
+	Name      string `json:"name,omitempty"`
+	Picture   string `json:"picture,omitempty"`
+	TokenType string `json:"type,omitempty"` // "access" or "refresh"
+	IssuedAt  int64  `json:"iat"`
+	ExpiresAt int64  `json:"exp"`
 }
 
 // IsExpired returns true if the token has expired.
@@ -45,17 +48,35 @@ func NewJWTService(secret string) *JWTService {
 	return &JWTService{secret: []byte(secret)}
 }
 
-// GenerateToken creates a signed JWT for the given user info.
+// GenerateToken creates a signed access JWT for the given user info.
 func (s *JWTService) GenerateToken(user *GoogleUserInfo) (string, error) {
 	now := time.Now()
 	claims := Claims{
 		Email:     user.Email,
 		Name:      user.Name,
 		Picture:   user.Picture,
+		TokenType: "access",
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(TokenExpiry).Unix(),
 	}
+	return s.signClaims(claims)
+}
 
+// GenerateRefreshToken creates a long-lived refresh JWT (30 days).
+// TZ §3.3: «refresh-token на 30 днів»
+func (s *JWTService) GenerateRefreshToken(user *GoogleUserInfo) (string, error) {
+	now := time.Now()
+	claims := Claims{
+		Email:     user.Email,
+		TokenType: "refresh",
+		IssuedAt:  now.Unix(),
+		ExpiresAt: now.Add(RefreshTokenExpiry).Unix(),
+	}
+	return s.signClaims(claims)
+}
+
+// signClaims creates a signed JWT string from claims.
+func (s *JWTService) signClaims(claims Claims) (string, error) {
 	// Header
 	header := map[string]string{"alg": jwtAlg, "typ": "JWT"}
 	headerJSON, _ := json.Marshal(header)
@@ -76,8 +97,33 @@ func (s *JWTService) GenerateToken(user *GoogleUserInfo) (string, error) {
 	return signingInput + "." + signatureB64, nil
 }
 
-// ValidateToken parses and validates a JWT string. Returns claims on success.
+// ValidateToken parses and validates an access JWT string. Returns claims on success.
 func (s *JWTService) ValidateToken(tokenStr string) (*Claims, error) {
+	claims, err := s.parseClaims(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+	// Reject refresh tokens used as access tokens
+	if claims.TokenType == "refresh" {
+		return nil, fmt.Errorf("jwt: refresh token cannot be used as access token")
+	}
+	return claims, nil
+}
+
+// ValidateRefreshToken parses and validates a refresh JWT.
+func (s *JWTService) ValidateRefreshToken(tokenStr string) (*Claims, error) {
+	claims, err := s.parseClaims(tokenStr)
+	if err != nil {
+		return nil, err
+	}
+	if claims.TokenType != "refresh" {
+		return nil, fmt.Errorf("jwt: not a refresh token")
+	}
+	return claims, nil
+}
+
+// parseClaims extracts and validates claims from a JWT string.
+func (s *JWTService) parseClaims(tokenStr string) (*Claims, error) {
 	parts := strings.SplitN(tokenStr, ".", 3)
 	if len(parts) != 3 {
 		return nil, fmt.Errorf("jwt: invalid token format")

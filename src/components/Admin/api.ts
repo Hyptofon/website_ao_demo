@@ -113,12 +113,25 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
   };
   if (token) headers["Authorization"] = `Bearer ${token}`;
 
-  const res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+  let res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
 
-  if (res.status === 401) {
+  if (res.status === 401 && token) {
+    // Try to refresh token
+    const newAuth = await refreshAccessToken();
+    if (newAuth) {
+      // Retry with new token
+      headers["Authorization"] = `Bearer ${newAuth}`;
+      res = await fetch(`${API_BASE}${path}`, { ...opts, headers });
+    } else {
+      clearToken();
+      window.location.reload(); // Force re-render of AdminPanel to show login
+      throw new Error("unauthorized");
+    }
+  } else if (res.status === 401) {
     clearToken();
     throw new Error("unauthorized");
   }
+
   if (!res.ok) throw new Error(await res.text());
   return res.json() as Promise<T>;
 }
@@ -126,6 +139,22 @@ async function api<T>(path: string, opts: RequestInit = {}): Promise<T> {
 // ─── Endpoints ──────────────────────────────────────────────────────────────
 
 export const getLoginUrl = async () => (await api<{ url: string }>(`${ADMIN_BASE}/auth/login`)).url;
+
+export const refreshAccessToken = async (): Promise<string | null> => {
+  try {
+    // Uses HTTP-only cookie, so we must include credentials
+    const res = await fetch(`${API_BASE}${ADMIN_BASE}/auth/refresh`, {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!res.ok) return null;
+    const data = await res.json() as { token: string };
+    setToken(data.token);
+    return data.token;
+  } catch (err) {
+    return null;
+  }
+};
 
 export const fetchSummary = (days = 30) => api<AnalyticsSummary>(`${ADMIN_BASE}/analytics/summary?days=${days}`);
 export const fetchDaily = (days = 30) => api<DailyStat[]>(`${ADMIN_BASE}/analytics/daily?days=${days}`);

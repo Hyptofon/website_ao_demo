@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"university-chatbot/backend/internal/infrastructure/security"
@@ -17,6 +18,8 @@ func RateLimitMiddleware(rl *security.RateLimiter) func(http.Handler) http.Handl
 			allowed, retryAfter := rl.Allow(ip, 1) // Base weight is 1
 			if !allowed {
 				secs := int(retryAfter.Seconds())
+				// TZ §6.1: Set standard HTTP Retry-After header
+				w.Header().Set("Retry-After", strconv.Itoa(secs))
 				// Provide both a human-readable message AND a machine-readable integer
 				// so the frontend countdown timer can use retry_after_seconds directly
 				// instead of parsing the message string with a regex.

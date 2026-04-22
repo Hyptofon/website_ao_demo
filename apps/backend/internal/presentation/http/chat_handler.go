@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5/middleware"
 
@@ -16,6 +17,7 @@ import (
 	"university-chatbot/backend/internal/application/features/chat/queries"
 	"university-chatbot/backend/internal/application/features/chat/validators"
 	"university-chatbot/backend/internal/domain"
+	"university-chatbot/backend/internal/infrastructure/metrics"
 	"university-chatbot/backend/internal/infrastructure/security"
 )
 
@@ -77,12 +79,18 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.validator.Validate(&req); err != nil {
+		metrics.ChatRequestsTotal.WithLabelValues(string(req.Language), "blocked").Inc()
+		metrics.ChatBlockedTotal.WithLabelValues("xss").Inc()
 		sseError(w, flusher, "validation_error", err.Error(), http.StatusBadRequest)
 		return
 	}
 
+	chatStart := time.Now()
+
 	// 3. Off-topic filter with side-effect (Ban/Penalty)
 	if h.offTopic.IsOffTopic(req.Message) {
+		metrics.ChatRequestsTotal.WithLabelValues(string(req.Language), "blocked").Inc()
+		metrics.ChatBlockedTotal.WithLabelValues("offtopic").Inc()
 		h.rateBan(realIP(r)) // Apply penalty ban
 
 		// Record blocked query in analytics so admin dashboard reflects reality.
@@ -124,6 +132,7 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.askBot.Handle(ctx, queries.AskBotQuery{Request: &req}, &sseWriter{w: w, flusher: flusher})
 	if err != nil {
+		metrics.ChatRequestsTotal.WithLabelValues(string(req.Language), "error").Inc()
 		slog.Error("RAG pipeline error",
 			"request_id", reqID,
 			"session_id", req.SessionID,
@@ -132,6 +141,10 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		h.handleRAGError(err, &req, w, flusher)
 		return
 	}
+
+	// Record success metrics
+	metrics.ChatRequestsTotal.WithLabelValues(string(req.Language), "ok").Inc()
+	metrics.ChatLatencySeconds.WithLabelValues(string(req.Language)).Observe(time.Since(chatStart).Seconds())
 
 	// 5. Send query hash so the frontend can submit feedback with the correct key
 	writeSSEMeta(w, flusher, result.QueryHash)
@@ -155,7 +168,12 @@ func (h *ChatHandler) handleRAGError(err error, req *domain.ChatRequest, w http.
 		}
 	}
 
-	sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
+	// The SSE connection is already open, so we cannot change the HTTP status.
+	// We gracefully stream the error message as a normal bot response.
+	escapedMsg := strings.ReplaceAll(msg, "\n", "\\n")
+	fmt.Fprintf(w, "data: %s\n\n", escapedMsg)
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // ─── POST /api/v1/feedback ────────────────────────────────────────────────────
@@ -170,6 +188,13 @@ func (h *ChatHandler) SubmitFeedback(w http.ResponseWriter, r *http.Request) {
 	if err := h.feedback.Handle(r.Context(), cmd); err != nil {
 		jsonError(w, "validation_error", err.Error(), http.StatusBadRequest)
 		return
+	}
+
+	// Record feedback metric
+	if cmd.Feedback == 1 {
+		metrics.FeedbackTotal.WithLabelValues("positive").Inc()
+	} else {
+		metrics.FeedbackTotal.WithLabelValues("negative").Inc()
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -225,12 +250,8 @@ func jsonError(w http.ResponseWriter, code, msg string, status int) {
 }
 
 func realIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.SplitN(ip, ",", 2)[0]
-	}
+	// In production (without a strictly trusted proxy configuration),
+	// blindly trusting X-Forwarded-For allows IP spoofing and rate limit bypass.
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx > 0 {
 		return addr[:idx]

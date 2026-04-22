@@ -23,6 +23,7 @@ import (
 	"university-chatbot/backend/internal/infrastructure/cache"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
+	"university-chatbot/backend/internal/infrastructure/memory"
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/qdrant"
 	"university-chatbot/backend/internal/infrastructure/security"
@@ -99,13 +100,15 @@ func main() {
 	documentRepo := sqlite.NewDocumentRepo(db)
 	promptRepo := sqlite.NewPromptRepo(db)
 	suggestionsRepo := sqlite.NewSuggestionsRepo(db)
+	settingsRepo := sqlite.NewAdminSettingsRepo(db)
 
 	// ── Infrastructure: Security ───────────────────────────────────────────────
 	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
 	offTopicFilter := security.NewOffTopicFilter()
 
-	// ── Infrastructure: Cache (Phase 3 — Redis/Upstash) ────────────────────────
+	// ── Infrastructure: Cache and Memory (Phase 3) ─────────────────────────────
 	cacheStore := cache.NewCacheFromEnv(cfg.UpstashRedisURL, cfg.UpstashRedisToken)
+	chatMem := memory.NewChatMemory(24 * time.Hour)
 
 	// ── Infrastructure: Auth (Phase 2 — Google OAuth + JWT) ────────────────────
 	oauthSvc := auth.NewOAuthService(auth.OAuthConfig{
@@ -138,6 +141,7 @@ func main() {
 	// ── Application layer: CQRS Handlers ─────────────────────────────────────
 	askBotHandler := queries.NewAskBotHandler(qdrantClient, geminiClient, analyticsRepo).
 		WithCache(cacheStore).
+		WithMemory(chatMem).
 		WithPromptSelector(promptSelector).
 		WithReranker(reranker)
 	feedbackHandler := commands.NewSubmitFeedbackHandler(analyticsRepo)
@@ -145,7 +149,11 @@ func main() {
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
-	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL)
+	adminHandler := chathttp.NewAdminHandler(
+		oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo,
+		promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails,
+		cfg.FrontendURL, settingsRepo, cfg.CookieSameSiteNone,
+	)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
 	// Derive admin path segment from ADMIN_TOKEN so the admin URL is
@@ -169,6 +177,7 @@ func main() {
 		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedEmails:    cfg.AdminAllowedEmails,
 		DB:               db,
+		AdminSettings:    settingsRepo,
 		AdminPathSegment: adminPathSegment,
 	})
 
@@ -233,6 +242,7 @@ type config struct {
 	// Phase 3: Feature flags
 	EnableReranking    bool
 	FrontendURL        string
+	CookieSameSiteNone bool
 }
 
 func loadConfig() config {
@@ -273,6 +283,7 @@ func loadConfig() config {
 		// Phase 3: Feature flags
 		EnableReranking:    os.Getenv("ENABLE_RERANKING") == "true",
 		FrontendURL:        getEnvOr("FRONTEND_URL", "http://localhost:4321/admin"),
+		CookieSameSiteNone: os.Getenv("COOKIE_SAME_SITE_NONE") == "true",
 	}
 }
 

@@ -23,6 +23,11 @@ func InitDB(dsn string) (*sql.DB, error) {
 	db.Exec("PRAGMA synchronous=NORMAL;")
 	db.Exec("PRAGMA foreign_keys=ON;")
 
+	// SQLite only supports one concurrent writer. Setting max open connections to 1
+	// prevents "database is locked" errors under heavy concurrent load while WAL mode
+	// handles readers efficiently.
+	db.SetMaxOpenConns(1)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {
@@ -143,6 +148,16 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_created_at ON queries(created_at);
 		CREATE INDEX IF NOT EXISTS idx_query_hash  ON queries(query_hash);
 		CREATE INDEX IF NOT EXISTS idx_feedback    ON queries(feedback);`,
+	},
+	{
+		Version:     7,
+		Description: "admin_settings table for auto-admin first user",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS admin_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
 	},
 }
 

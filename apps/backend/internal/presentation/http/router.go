@@ -52,7 +52,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		AllowedOrigins:   deps.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Authorization", "Content-Type", "Accept", "X-Admin-Token"},
-		AllowCredentials: false,
+		AllowCredentials: true,
 		MaxAge:           3600,
 	}))
 
@@ -101,6 +101,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	if deps.AdminHandler != nil {
 		r.Get(adminPrefix+"/auth/login", deps.AdminHandler.HandleLogin)
 		r.Get(adminPrefix+"/auth/callback", deps.AdminHandler.HandleCallback)
+		r.Post(adminPrefix+"/auth/refresh", deps.AdminHandler.HandleRefreshToken)
 	}
 
 	// ── Admin API (protected) ─────────────────────────────────────────────
@@ -120,6 +121,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Post("/documents/upload", deps.IndexHandler.HandleAdminUpload)
 			r.Get("/documents/jobs/{job_id}", deps.IndexHandler.GetJobStatus)
 			r.Delete("/documents/{document_id}", deps.IndexHandler.HandleDeleteDocument)
+			r.Post("/documents/{document_id}/reindex", deps.IndexHandler.HandleReindexDocument)
 		}
 
 		// Admin panel endpoints
@@ -134,6 +136,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Get("/analytics/daily", deps.AdminHandler.HandleDailyStats)
 			r.Get("/analytics/top-queries", deps.AdminHandler.HandleTopQueries)
 			r.Get("/analytics/feedback", deps.AdminHandler.HandleFeedbackStats)
+			r.Get("/analytics/export/csv", deps.AdminHandler.HandleExportCSV)
 
 			// User queries (individual rows)
 			r.Get("/queries", deps.AdminHandler.HandleRecentQueries)

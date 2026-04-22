@@ -1,10 +1,12 @@
 package validators
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/go-playground/validator/v10"
 	"university-chatbot/backend/internal/domain"
+	"university-chatbot/backend/internal/infrastructure/security"
 )
 
 // ValidationError represents a list of field-level validation failures.
@@ -41,6 +43,14 @@ func (v *AskBotValidator) Validate(req *domain.ChatRequest) error {
 	if req.Language != domain.LangUk && req.Language != domain.LangEn {
 		req.Language = domain.LangUk
 	}
+
+	// TZ §3.5 / §6.1: XSS prevention — reject malicious HTML/JS payloads.
+	if security.DetectXSSPayload(req.Message) {
+		return fmt.Errorf("message contains potentially malicious content")
+	}
+
+	// Sanitize HTML entities in the message to prevent stored XSS.
+	req.Message = security.SanitizeInput(req.Message)
 
 	err := v.validate.Struct(req)
 	if err != nil {

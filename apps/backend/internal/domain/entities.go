@@ -156,11 +156,15 @@ var (
 type AdminAction string
 
 const (
-	ActionLogin          AdminAction = "login"
-	ActionUploadDocument AdminAction = "upload_document"
-	ActionDeleteDocument AdminAction = "delete_document"
-	ActionViewAnalytics  AdminAction = "view_analytics"
-	ActionViewAuditLog   AdminAction = "view_audit_log"
+	ActionLogin            AdminAction = "login"
+	ActionLogout           AdminAction = "logout"
+	ActionUploadDocument   AdminAction = "upload_document"
+	ActionDeleteDocument   AdminAction = "delete_document"
+	ActionRenameDocument   AdminAction = "rename_document"
+	ActionReindexDocument  AdminAction = "reindex_document"
+	ActionExportCSV        AdminAction = "export_csv"
+	ActionViewAnalytics    AdminAction = "view_analytics"
+	ActionViewAuditLog     AdminAction = "view_audit_log"
 )
 
 // AuditEntry records a single admin action for the audit log.

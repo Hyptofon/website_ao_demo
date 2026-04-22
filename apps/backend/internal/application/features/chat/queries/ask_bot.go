@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -81,28 +82,17 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	}
 
 	// --- 3. Build context string from top chunks with hybrid scoring ---
-	// TZ §3.2 requires 'Semantic search + Keyword search (BM25)'.
-	// Qdrant free tier does not support sparse vectors (needed for true BM25).
-	// We approximate BM25 at the application layer by:
-	//   a) Requiring minimum cosine similarity score >= 0.7 (dense semantic search)
-	//   b) Boosting chunks that contain query keywords (BM25 approximation)
-	// This combination satisfies the spirit of the hybrid search requirement.
 	var contextBuf bytes.Buffer
 	sources := make([]domain.Source, 0, len(results))
 	seenDocs := make(map[string]bool)
 
-	// Tokenize query into lowercase words for keyword matching (BM25 approximation).
 	queryWords := tokenizeQuery(req.Message)
 
 	for _, r := range results {
-		// TZ §3.2: minimum score threshold for semantic relevance.
 		if r.Score < 0.7 {
 			continue
 		}
 
-		// BM25 approximation: prefer chunks that contain query keywords.
-		// Chunks with keyword matches are included even at lower semantic scores (0.5+);
-		// pure semantic matches require the full 0.7 threshold.
 		hasKeyword := chunkContainsKeyword(r.Chunk.Text, queryWords)
 		if r.Score < 0.5 && !hasKeyword {
 			continue
@@ -111,7 +101,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		fmt.Fprintf(&contextBuf, "--- Документ: %s (стор. %d) ---\n%s\n\n",
 			r.Chunk.DocumentName, r.Chunk.PageNumber, r.Chunk.Text)
 
-		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 15 { // Up to 15 sources
+		if !seenDocs[r.Chunk.DocumentName] && len(sources) < 15 {
 			seenDocs[r.Chunk.DocumentName] = true
 			sources = append(sources, domain.Source{
 				DocumentName: r.Chunk.DocumentName,
@@ -122,15 +112,11 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	}
 
 	// --- 4. Guard: if no relevant context — return fallback without calling LLM ---
-	// This enforces "відповідати ВИКЛЮЧНО на основі наданих документів".
-	// When contextBuf is empty the LLM has nothing grounded to work with and
-	// would hallucinate, so we return an honest "I don't know" instead.
 	if contextBuf.Len() == 0 {
 		fallback := domain.FallbackResponseUA
 		if req.Language == domain.LangEn {
 			fallback = domain.FallbackResponseEN
 		}
-		// Stream the fallback as a single SSE token so the frontend renders it normally.
 		fallbackEscaped := strings.ReplaceAll(fallback, "\n", "\\n")
 		fmt.Fprintf(w, "data: %s\n\n", fallbackEscaped)
 		if f, ok := w.(interface{ Flush() }); ok {
@@ -139,13 +125,15 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 
 		elapsed := time.Since(start).Milliseconds()
 		go func() {
-			_ = h.analytics.Record(context.Background(), domain.QueryRecord{
+			if err := h.analytics.Record(context.Background(), domain.QueryRecord{
 				QueryHash:  queryHash,
 				Language:   req.Language,
 				ResponseMs: elapsed,
 				SourcesCnt: 0,
 				IsBlocked:  false,
-			})
+			}); err != nil {
+				slog.Error("Failed to record analytics", "error", err)
+			}
 		}()
 
 		return &AskBotResult{
@@ -164,32 +152,79 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		sysPrompt = selection.PromptText
 		variantID = selection.VariantID
 	} else {
-		// Default prompts
 		sysPrompt = domain.SystemPromptUA
 		if req.Language == domain.LangEn {
 			sysPrompt = domain.SystemPromptEN
 		}
 	}
 
-	// --- 6. Stream LLM response ---
-	if err := h.llm.StreamAnswer(ctx, sysPrompt, req.Message, contextBuf.String(), req.Language, w); err != nil {
+	// --- 5.5. Phase 3: Check response cache before calling LLM ---
+	// Cache key = hash of (query + context), TTL = 1 hour per TZ §4.2.
+	ctxHash := sha256.Sum256([]byte(req.Message + contextBuf.String()))
+	cacheKey := fmt.Sprintf("resp:%x", ctxHash[:12])
+
+	if h.cache != nil {
+		cached, cacheErr := h.cache.Get(ctx, cacheKey)
+		if cacheErr == nil && cached != "" {
+			// Cache hit — stream the cached response directly
+			cachedEscaped := strings.ReplaceAll(cached, "\n", "\\n")
+			fmt.Fprintf(w, "data: %s\n\n", cachedEscaped)
+			if f, ok := w.(interface{ Flush() }); ok {
+				f.Flush()
+			}
+
+			elapsed := time.Since(start).Milliseconds()
+			go func() {
+				if err := h.analytics.Record(context.Background(), domain.QueryRecord{
+					QueryHash:  queryHash,
+					Language:   req.Language,
+					ResponseMs: elapsed,
+					SourcesCnt: len(sources),
+					IsBlocked:  false,
+				}); err != nil {
+					slog.Error("Failed to record analytics", "error", err)
+				}
+			}()
+
+			return &AskBotResult{
+				Sources:   sources,
+				QueryHash: queryHash,
+				StartedAt: start,
+				VariantID: variantID,
+			}, nil
+		}
+	}
+
+	// --- 6. Stream LLM response (capture for caching) ---
+	var capturedResponse strings.Builder
+	teeWriter := io.MultiWriter(w, &capturedResponse)
+
+	if err := h.llm.StreamAnswer(ctx, sysPrompt, req.Message, contextBuf.String(), req.Language, teeWriter); err != nil {
 		return nil, fmt.Errorf("llm stream: %w", err)
+	}
+
+	// --- 6.5. Store response in cache (async, best-effort) ---
+	if h.cache != nil && capturedResponse.Len() > 0 {
+		go func() {
+			if err := h.cache.Set(context.Background(), cacheKey, capturedResponse.String(), time.Hour); err != nil {
+				slog.Warn("Failed to cache response", "error", err)
+			}
+		}()
 	}
 
 	elapsed := time.Since(start).Milliseconds()
 
 	// --- 7. Record analytics in background ---
 	go func() {
-		// Use a detached context so cancellation of the HTTP request doesn't abort the DB insert
-		rec := domain.QueryRecord{
+		if err := h.analytics.Record(context.Background(), domain.QueryRecord{
 			QueryHash:  queryHash,
-			QueryText:  req.Message,
 			Language:   req.Language,
 			ResponseMs: elapsed,
 			SourcesCnt: len(sources),
 			IsBlocked:  false,
+		}); err != nil {
+			slog.Error("Failed to record analytics", "error", err)
 		}
-		_ = h.analytics.Record(context.Background(), rec)
 	}()
 
 	return &AskBotResult{

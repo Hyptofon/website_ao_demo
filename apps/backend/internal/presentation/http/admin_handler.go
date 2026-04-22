@@ -126,6 +126,13 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Generate refresh token (30 days, TZ §3.3)
+	refreshToken, err := h.jwtSvc.GenerateRefreshToken(userInfo)
+	if err != nil {
+		slog.Error("Refresh token generation failed", "error", err)
+		// Non-fatal: proceed without refresh token
+	}
+
 	// Record login in audit log.
 	// Use context.Background() — r.Context() is cancelled when the HTTP handler
 	// returns, which would cause the DB insert to silently fail.
@@ -141,6 +148,19 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("Admin login successful", "email", userInfo.Email)
+
+	// Set refresh token as httpOnly cookie (not accessible via JS)
+	if refreshToken != "" {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "refresh_token",
+			Value:    refreshToken,
+			Path:     "/",
+			MaxAge:   30 * 24 * 3600, // 30 days
+			HttpOnly: true,
+			Secure:   true,
+			SameSite: http.SameSiteLaxMode,
+		})
+	}
 
 	// Redirect to frontend admin page with the token in the URL fragment.
 	//
@@ -161,6 +181,45 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 	redirectURL.Fragment = "token=" + token
 
 	http.Redirect(w, r, redirectURL.String(), http.StatusFound)
+}
+
+// HandleRefreshToken exchanges a valid refresh token for a new access token.
+// POST /admin/auth/refresh
+// TZ §3.3: «refresh-token на 30 днів»
+func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request) {
+	cookie, err := r.Cookie("refresh_token")
+	if err != nil || cookie.Value == "" {
+		jsonError(w, "missing_refresh_token", "No refresh token provided", http.StatusUnauthorized)
+		return
+	}
+
+	claims, err := h.jwtSvc.ValidateRefreshToken(cookie.Value)
+	if err != nil {
+		jsonError(w, "invalid_refresh_token", "Refresh token is invalid or expired", http.StatusUnauthorized)
+		return
+	}
+
+	// Check email whitelist
+	if !isEmailAllowed(claims.Email, h.allowedEmails) {
+		jsonError(w, "forbidden", "Email no longer authorized", http.StatusForbidden)
+		return
+	}
+
+	// Generate new access token
+	newToken, err := h.jwtSvc.GenerateToken(&auth.GoogleUserInfo{
+		Email: claims.Email,
+		Name:  claims.Name,
+	})
+	if err != nil {
+		jsonError(w, "token_error", "Failed to generate new access token", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{
+		"token":      newToken,
+		"expires_in": "86400",
+	})
 }
 
 // ─── Analytics Endpoints ────────────────────────────────────────────────────
@@ -238,6 +297,36 @@ func (h *AdminHandler) HandleFeedbackStats(w http.ResponseWriter, r *http.Reques
 	json.NewEncoder(w).Encode(stats)
 }
 
+// HandleExportCSV exports analytics data as CSV.
+// GET /admin/analytics/export/csv?days=30
+// TZ §3.3: «Експорт даних у CSV»
+func (h *AdminHandler) HandleExportCSV(w http.ResponseWriter, r *http.Request) {
+	days := queryInt(r, "days", 30)
+	limit := queryInt(r, "limit", 1000)
+
+	rows, err := h.analyticsRepo.RecentQueries(r.Context(), days, limit)
+	if err != nil {
+		slog.Error("CSV export failed", "error", err)
+		jsonError(w, "db_error", "Failed to export analytics", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", `attachment; filename="analytics_export.csv"`)
+	w.WriteHeader(http.StatusOK)
+
+	// BOM for Excel UTF-8 compatibility
+	w.Write([]byte{0xEF, 0xBB, 0xBF})
+
+	// CSV header
+	fmt.Fprintf(w, "query_hash,language,response_ms,sources_cnt,feedback,is_blocked,created_at\n")
+
+	for _, q := range rows {
+		fmt.Fprintf(w, "%s,%s,%d,%d,%d,%d,%s\n",
+			q.QueryHash, q.Language, q.ResponseMs, q.SourcesCnt, q.Feedback, q.IsBlocked, q.CreatedAt)
+	}
+}
+
 // HandleRecentQueries returns individual query rows for admin inspection.
 // GET /admin/queries?days=30&limit=50
 func (h *AdminHandler) HandleRecentQueries(w http.ResponseWriter, r *http.Request) {
@@ -288,17 +377,7 @@ func (h *AdminHandler) HandleDownloadDocument(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	ext := ""
-	for _, supportedExt := range []string{".pdf", ".docx", ".xlsx", ".txt"} {
-		// Just guess the extension or parse from original filename
-		if len(doc.Filename) > len(supportedExt) && doc.Filename[len(doc.Filename)-len(supportedExt):] == supportedExt {
-			ext = supportedExt
-			break
-		}
-	}
-	
-	// A simpler way: we know it was saved as `jobID + ext` inside data/documents/
-	ext = filepath.Ext(doc.Filename)
+	ext := filepath.Ext(doc.Filename)
 	filePath := filepath.Join(".", "data", "documents", docID+strings.ToLower(ext))
 
 	// Ensure file exists

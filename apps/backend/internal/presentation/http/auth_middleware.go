@@ -72,6 +72,8 @@ func AdminEmailFromCtx(ctx context.Context) string {
 }
 
 // isEmailAllowed checks if an email is in the whitelist.
+// Supports both exact email matches ("user@example.com") and domain patterns
+// ("@university.edu.ua") per TZ §3.3.
 // Empty whitelist = allow all (for development).
 func isEmailAllowed(email string, allowed []string) bool {
 	if len(allowed) == 0 {
@@ -79,7 +81,13 @@ func isEmailAllowed(email string, allowed []string) bool {
 	}
 	email = strings.ToLower(strings.TrimSpace(email))
 	for _, a := range allowed {
-		if strings.ToLower(strings.TrimSpace(a)) == email {
+		a = strings.ToLower(strings.TrimSpace(a))
+		// Domain-based matching: "@university.edu.ua"
+		if strings.HasPrefix(a, "@") && strings.HasSuffix(email, a) {
+			return true
+		}
+		// Exact email match
+		if a == email {
 			return true
 		}
 	}

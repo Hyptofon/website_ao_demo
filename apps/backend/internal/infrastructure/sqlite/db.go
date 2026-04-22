@@ -23,6 +23,11 @@ func InitDB(dsn string) (*sql.DB, error) {
 	db.Exec("PRAGMA synchronous=NORMAL;")
 	db.Exec("PRAGMA foreign_keys=ON;")
 
+	// SQLite only supports one concurrent writer. Setting max open connections to 1
+	// prevents "database is locked" errors under heavy concurrent load while WAL mode
+	// handles readers efficiently.
+	db.SetMaxOpenConns(1)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := db.PingContext(ctx); err != nil {

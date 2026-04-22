@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -170,15 +171,12 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	if h.memory != nil {
 		hist, err := h.memory.GetHistory(ctx, req.SessionID, 5) // limit to 5 messages
 		if err == nil && len(hist) > 0 {
-			contextBuf.WriteString("\n\n--- Chat History ---\n")
-			for _, m := range hist {
-				role := "User"
-				if m.Role == "assistant" {
-					role = "Assistant"
-				}
-				contextBuf.WriteString(fmt.Sprintf("%s: %s\n", role, m.Content))
-			}
-			contextBuf.WriteString("--------------------\n")
+			// SECURITY: Serialize history to JSON to prevent Prompt Injection.
+			// Raw string concatenation allows attackers to escape history blocks via formatting.
+			histJSON, _ := json.Marshal(hist)
+			contextBuf.WriteString("\n\n--- Chat History (JSON) ---\n")
+			contextBuf.Write(histJSON)
+			contextBuf.WriteString("\n---------------------------\n")
 		}
 	}
 

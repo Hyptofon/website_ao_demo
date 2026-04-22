@@ -16,6 +16,7 @@ type ChatMemory struct {
 }
 
 type sessionData struct {
+	mu       sync.Mutex
 	History  []domain.Message
 	LastSeen time.Time
 }
@@ -50,6 +51,9 @@ func (m *ChatMemory) GetHistory(ctx context.Context, sessionID string, limit int
 	}
 
 	data := val.(*sessionData)
+	data.mu.Lock()
+	defer data.mu.Unlock()
+
 	data.LastSeen = time.Now()
 
 	hist := data.History
@@ -76,9 +80,11 @@ func (m *ChatMemory) AddMessage(ctx context.Context, sessionID string, msg domai
 	})
 
 	data := val.(*sessionData)
-	// Mutex is not strictly necessary for simple slice append if we assume one request per session at a time,
-	// but to be absolutely thread-safe we'd need a lock per session. For the MVP, we just replace the slice.
-	// We'll use a simple approach: limit history length to avoid infinite growth (e.g. max 50).
+	
+	data.mu.Lock()
+	defer data.mu.Unlock()
+
+	// Limit history length to avoid infinite growth (e.g. max 50).
 	hist := append(data.History, msg)
 	if len(hist) > 50 {
 		hist = hist[len(hist)-50:]

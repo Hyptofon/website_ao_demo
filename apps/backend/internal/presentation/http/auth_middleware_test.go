@@ -39,11 +39,11 @@ func TestIsEmailAllowed_MixedRules(t *testing.T) {
 }
 
 func TestIsEmailAllowed_EmptyWhitelist(t *testing.T) {
-	if !isEmailAllowed("anyone@anywhere.com", nil) {
-		t.Error("Empty whitelist should allow all")
+	if isEmailAllowed("anyone@anywhere.com", nil) {
+		t.Error("Empty whitelist should return false (auto-admin takes over)")
 	}
-	if !isEmailAllowed("anyone@anywhere.com", []string{}) {
-		t.Error("Empty whitelist should allow all")
+	if isEmailAllowed("anyone@anywhere.com", []string{}) {
+		t.Error("Empty whitelist should return false (auto-admin takes over)")
 	}
 }
 

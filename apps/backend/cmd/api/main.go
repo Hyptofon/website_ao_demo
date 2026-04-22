@@ -99,6 +99,7 @@ func main() {
 	documentRepo := sqlite.NewDocumentRepo(db)
 	promptRepo := sqlite.NewPromptRepo(db)
 	suggestionsRepo := sqlite.NewSuggestionsRepo(db)
+	settingsRepo := sqlite.NewAdminSettingsRepo(db)
 
 	// ── Infrastructure: Security ───────────────────────────────────────────────
 	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
@@ -145,7 +146,7 @@ func main() {
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
-	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL)
+	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL, settingsRepo)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
 	// Derive admin path segment from ADMIN_TOKEN so the admin URL is
@@ -169,6 +170,7 @@ func main() {
 		AllowedOrigins:   cfg.AllowedOrigins,
 		AllowedEmails:    cfg.AdminAllowedEmails,
 		DB:               db,
+		AdminSettings:    settingsRepo,
 		AdminPathSegment: adminPathSegment,
 	})
 

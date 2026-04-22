@@ -33,6 +33,7 @@ type RouterDeps struct {
 	AllowedOrigins   []string
 	AllowedEmails    []string
 	DB               *sql.DB
+	AdminSettings    *sqlite.AdminSettingsRepo
 	// AdminPathSegment is a 32-char hex derived from SHA256(ADMIN_TOKEN).
 	// Used to mount the admin routes at /admin-{segment}/* instead of /admin/*,
 	// making the URL unpredictable to external parties (TZ §3.3, §4.2).
@@ -114,7 +115,7 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	// admin surface unpredictable. The path segment is derived from ADMIN_TOKEN.
 	r.Route(adminPrefix, func(r chi.Router) {
 		// Dual auth: JWT OR Admin-Token
-		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails))
+		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails, deps.AdminSettings))
 
 		// Audit logging for all admin actions
 		if deps.AuditRepo != nil {

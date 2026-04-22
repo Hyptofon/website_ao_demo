@@ -16,6 +16,7 @@ import (
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/auth"
+	"university-chatbot/backend/internal/infrastructure/sqlite"
 )
 
 // ─── Admin Handler ──────────────────────────────────────────────────────────
@@ -33,6 +34,7 @@ type AdminHandler struct {
 	vectorStore   domain.VectorStore
 	allowedEmails []string
 	frontendURL   string // URL of the frontend admin page for OAuth redirect
+	settingsRepo  *sqlite.AdminSettingsRepo
 }
 
 // NewAdminHandler constructs the admin handler with all dependencies.
@@ -47,6 +49,7 @@ func NewAdminHandler(
 	vectorStore domain.VectorStore,
 	allowedEmails []string,
 	frontendURL string,
+	settingsRepo *sqlite.AdminSettingsRepo,
 ) *AdminHandler {
 	if frontendURL == "" {
 		frontendURL = "http://localhost:4321/admin"
@@ -62,6 +65,7 @@ func NewAdminHandler(
 		vectorStore:   vectorStore,
 		allowedEmails: allowedEmails,
 		frontendURL:   frontendURL,
+		settingsRepo:  settingsRepo,
 	}
 }
 
@@ -111,9 +115,9 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Check email whitelist
-	if !isEmailAllowed(userInfo.Email, h.allowedEmails) {
-		slog.Warn("OAuth login rejected: email not in whitelist", "email", userInfo.Email)
+	// Check access (whitelist or auto-admin)
+	if !CheckAdminAccess(r.Context(), userInfo.Email, h.allowedEmails, h.settingsRepo) {
+		slog.Warn("OAuth login rejected: email not authorized", "email", userInfo.Email)
 		writeAuthError(w, "Access denied: email not authorized", http.StatusForbidden)
 		return
 	}
@@ -199,8 +203,8 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Check email whitelist
-	if !isEmailAllowed(claims.Email, h.allowedEmails) {
+	// Check access (whitelist or auto-admin)
+	if !CheckAdminAccess(r.Context(), claims.Email, h.allowedEmails, h.settingsRepo) {
 		jsonError(w, "forbidden", "Email no longer authorized", http.StatusForbidden)
 		return
 	}

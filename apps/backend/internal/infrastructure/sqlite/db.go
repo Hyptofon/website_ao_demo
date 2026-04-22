@@ -144,6 +144,16 @@ var migrations = []migration{
 		CREATE INDEX IF NOT EXISTS idx_query_hash  ON queries(query_hash);
 		CREATE INDEX IF NOT EXISTS idx_feedback    ON queries(feedback);`,
 	},
+	{
+		Version:     7,
+		Description: "admin_settings table for auto-admin first user",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS admin_settings (
+			key TEXT PRIMARY KEY,
+			value TEXT NOT NULL DEFAULT '',
+			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {

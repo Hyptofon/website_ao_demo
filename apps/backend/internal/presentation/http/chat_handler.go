@@ -168,7 +168,12 @@ func (h *ChatHandler) handleRAGError(err error, req *domain.ChatRequest, w http.
 		}
 	}
 
-	sseError(w, flusher, "internal_error", msg, http.StatusInternalServerError)
+	// The SSE connection is already open, so we cannot change the HTTP status.
+	// We gracefully stream the error message as a normal bot response.
+	escapedMsg := strings.ReplaceAll(msg, "\n", "\\n")
+	fmt.Fprintf(w, "data: %s\n\n", escapedMsg)
+	fmt.Fprintf(w, "data: [DONE]\n\n")
+	flusher.Flush()
 }
 
 // ─── POST /api/v1/feedback ────────────────────────────────────────────────────

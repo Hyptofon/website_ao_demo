@@ -49,19 +49,21 @@ export function streamChat(
 
       if (!res.ok || !res.body) {
         const body = await res.text();
-        let errMsg = body;
+        let errMsg = body || "Unknown server error";
         let errCode = "http_error";
         
-        // The backend sends errors as SSE events: event: error\ndata: {...}
-        // We prefer the explicit retry_after_seconds int field over regex-parsing the message.
-        if (body.includes("data: {")) {
+        // Handle explicit 429 Rate Limit from backend middleware
+        if (res.status === 429) {
+          errCode = "rate_limit_exceeded";
+          errMsg = "__retry:60__Rate limit exceeded. Please try again later.";
+        } else if (body.includes("data: {")) {
+          // The backend might send errors as SSE events: event: error\ndata: {...}
           const match = body.match(/data: (\{.*?\})/);
           if (match) {
             try {
               const parsed = JSON.parse(match[1]);
               if (parsed.error) errCode = parsed.error;
               if (parsed.message) errMsg = parsed.message;
-              // Backend now sends retry_after_seconds as an integer — use it directly.
               if (typeof parsed.retry_after_seconds === "number") {
                 errMsg = `__retry:${parsed.retry_after_seconds}__${errMsg}`;
               }

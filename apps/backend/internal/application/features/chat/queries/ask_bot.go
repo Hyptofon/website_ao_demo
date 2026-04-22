@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"university-chatbot/backend/internal/domain"
+	"university-chatbot/backend/internal/infrastructure/metrics"
 )
 
 // System prompts are now centralized in domain/prompts.go
@@ -166,6 +167,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	if h.cache != nil {
 		cached, cacheErr := h.cache.Get(ctx, cacheKey)
 		if cacheErr == nil && cached != "" {
+			metrics.CacheHitsTotal.WithLabelValues("hit").Inc()
 			// Cache hit — stream the cached response directly
 			cachedEscaped := strings.ReplaceAll(cached, "\n", "\\n")
 			fmt.Fprintf(w, "data: %s\n\n", cachedEscaped)
@@ -196,6 +198,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	}
 
 	// --- 6. Stream LLM response (capture for caching) ---
+	metrics.CacheHitsTotal.WithLabelValues("miss").Inc()
 	var capturedResponse strings.Builder
 	teeWriter := io.MultiWriter(w, &capturedResponse)
 

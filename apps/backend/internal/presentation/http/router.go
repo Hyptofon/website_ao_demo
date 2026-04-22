@@ -9,6 +9,7 @@ import (
 	"university-chatbot/backend/internal/infrastructure/auth"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
+	_ "university-chatbot/backend/internal/infrastructure/metrics" // register Prometheus metrics
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/security"
 	"university-chatbot/backend/internal/infrastructure/sqlite"
@@ -16,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 // RouterDeps bundles all dependencies needed to build the HTTP router.
@@ -82,6 +84,9 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		w.WriteHeader(status)
 		json.NewEncoder(w).Encode(checks)
 	})
+
+	// ── Prometheus Metrics (TZ §8.2) ──────────────────────────────────────────
+	r.Handle("/metrics", promhttp.Handler())
 
 	// ── Public Chat API ────────────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {

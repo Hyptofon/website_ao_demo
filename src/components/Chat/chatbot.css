@@ -255,6 +255,34 @@
   justify-content: space-between;
 }
 
+.cb-error-banner__content {
+  flex: 1;
+}
+
+.cb-error-banner__actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.cb-error-retry {
+  background: none;
+  border: none;
+  color: #991b1b;
+  font-weight: 600;
+  font-size: 11px;
+  cursor: pointer;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(153, 27, 27, 0.1);
+  transition: background 0.15s ease;
+}
+
+.cb-error-retry:hover {
+  background: rgba(153, 27, 27, 0.2);
+}
+
 .cb-error-dismiss {
   background: none;
   border: none;

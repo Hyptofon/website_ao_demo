@@ -45,7 +45,6 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r := chi.NewRouter()
 
 	// ── Global middleware ──────────────────────────────────────────────────────
-	r.Use(middleware.RealIP)
 	r.Use(middleware.RequestID) // Pattern #4: Request ID tracing
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)

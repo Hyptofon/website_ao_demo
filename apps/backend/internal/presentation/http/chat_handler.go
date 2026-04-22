@@ -245,12 +245,8 @@ func jsonError(w http.ResponseWriter, code, msg string, status int) {
 }
 
 func realIP(r *http.Request) string {
-	if ip := r.Header.Get("X-Real-IP"); ip != "" {
-		return ip
-	}
-	if ip := r.Header.Get("X-Forwarded-For"); ip != "" {
-		return strings.SplitN(ip, ",", 2)[0]
-	}
+	// In production (without a strictly trusted proxy configuration),
+	// blindly trusting X-Forwarded-For allows IP spoofing and rate limit bypass.
 	addr := r.RemoteAddr
 	if idx := strings.LastIndex(addr, ":"); idx > 0 {
 		return addr[:idx]

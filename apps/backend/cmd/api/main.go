@@ -23,6 +23,7 @@ import (
 	"university-chatbot/backend/internal/infrastructure/cache"
 	"university-chatbot/backend/internal/infrastructure/chunker"
 	"university-chatbot/backend/internal/infrastructure/gemini"
+	"university-chatbot/backend/internal/infrastructure/memory"
 	"university-chatbot/backend/internal/infrastructure/parser"
 	"university-chatbot/backend/internal/infrastructure/qdrant"
 	"university-chatbot/backend/internal/infrastructure/security"
@@ -105,8 +106,9 @@ func main() {
 	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
 	offTopicFilter := security.NewOffTopicFilter()
 
-	// ── Infrastructure: Cache (Phase 3 — Redis/Upstash) ────────────────────────
+	// ── Infrastructure: Cache and Memory (Phase 3) ─────────────────────────────
 	cacheStore := cache.NewCacheFromEnv(cfg.UpstashRedisURL, cfg.UpstashRedisToken)
+	chatMem := memory.NewChatMemory(24 * time.Hour)
 
 	// ── Infrastructure: Auth (Phase 2 — Google OAuth + JWT) ────────────────────
 	oauthSvc := auth.NewOAuthService(auth.OAuthConfig{
@@ -139,6 +141,7 @@ func main() {
 	// ── Application layer: CQRS Handlers ─────────────────────────────────────
 	askBotHandler := queries.NewAskBotHandler(qdrantClient, geminiClient, analyticsRepo).
 		WithCache(cacheStore).
+		WithMemory(chatMem).
 		WithPromptSelector(promptSelector).
 		WithReranker(reranker)
 	feedbackHandler := commands.NewSubmitFeedbackHandler(analyticsRepo)

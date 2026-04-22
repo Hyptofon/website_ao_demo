@@ -35,6 +35,7 @@ type AskBotHandler struct {
 	llm            domain.LLMClient
 	analytics      domain.AnalyticsRepo
 	cache          domain.CacheStore    // Phase 3: optional cache
+	memory         domain.ConversationMemory // Phase 3: optional history
 	promptSelector *PromptSelector      // Phase 3: A/B testing
 	reranker       *Reranker            // Phase 3: reranking
 }
@@ -47,6 +48,12 @@ func NewAskBotHandler(vs domain.VectorStore, llm domain.LLMClient, ar domain.Ana
 // WithCache sets the optional cache store (Phase 3).
 func (h *AskBotHandler) WithCache(cache domain.CacheStore) *AskBotHandler {
 	h.cache = cache
+	return h
+}
+
+// WithMemory sets the optional conversation memory (Phase 3).
+func (h *AskBotHandler) WithMemory(memory domain.ConversationMemory) *AskBotHandler {
+	h.memory = memory
 	return h
 }
 
@@ -159,6 +166,33 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		}
 	}
 
+	// --- 5.1 Load conversation history ---
+	if h.memory != nil {
+		hist, err := h.memory.GetHistory(ctx, req.SessionID, 5) // limit to 5 messages
+		if err == nil && len(hist) > 0 {
+			contextBuf.WriteString("\n\n--- Chat History ---\n")
+			for _, m := range hist {
+				role := "User"
+				if m.Role == "assistant" {
+					role = "Assistant"
+				}
+				contextBuf.WriteString(fmt.Sprintf("%s: %s\n", role, m.Content))
+			}
+			contextBuf.WriteString("--------------------\n")
+		}
+	}
+
+	if h.promptSelector != nil {
+		selection := h.promptSelector.Select(ctx, req.Language)
+		sysPrompt = selection.PromptText
+		variantID = selection.VariantID
+	} else {
+		sysPrompt = domain.SystemPromptUA
+		if req.Language == domain.LangEn {
+			sysPrompt = domain.SystemPromptEN
+		}
+	}
+
 	// --- 5.5. Phase 3: Check response cache before calling LLM ---
 	// Cache key = hash of (query + context), TTL = 1 hour per TZ §4.2.
 	ctxHash := sha256.Sum256([]byte(req.Message + contextBuf.String()))
@@ -206,11 +240,18 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		return nil, fmt.Errorf("llm stream: %w", err)
 	}
 
-	// --- 6.5. Store response in cache (async, best-effort) ---
-	if h.cache != nil && capturedResponse.Len() > 0 {
+	// --- 6.5. Store response in cache and memory (async, best-effort) ---
+	if capturedResponse.Len() > 0 {
 		go func() {
-			if err := h.cache.Set(context.Background(), cacheKey, capturedResponse.String(), time.Hour); err != nil {
-				slog.Warn("Failed to cache response", "error", err)
+			bgCtx := context.Background()
+			if h.cache != nil {
+				if err := h.cache.Set(bgCtx, cacheKey, capturedResponse.String(), time.Hour); err != nil {
+					slog.Warn("Failed to cache response", "error", err)
+				}
+			}
+			if h.memory != nil {
+				_ = h.memory.AddMessage(bgCtx, req.SessionID, domain.Message{Role: "user", Content: req.Message})
+				_ = h.memory.AddMessage(bgCtx, req.SessionID, domain.Message{Role: "assistant", Content: capturedResponse.String()})
 			}
 		}()
 	}

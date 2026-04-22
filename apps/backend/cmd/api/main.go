@@ -149,7 +149,11 @@ func main() {
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
-	adminHandler := chathttp.NewAdminHandler(oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo, promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails, cfg.FrontendURL, settingsRepo)
+	adminHandler := chathttp.NewAdminHandler(
+		oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo,
+		promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails,
+		cfg.FrontendURL, settingsRepo, cfg.CookieSameSiteNone,
+	)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
 	// Derive admin path segment from ADMIN_TOKEN so the admin URL is
@@ -238,6 +242,7 @@ type config struct {
 	// Phase 3: Feature flags
 	EnableReranking    bool
 	FrontendURL        string
+	CookieSameSiteNone bool
 }
 
 func loadConfig() config {
@@ -278,6 +283,7 @@ func loadConfig() config {
 		// Phase 3: Feature flags
 		EnableReranking:    os.Getenv("ENABLE_RERANKING") == "true",
 		FrontendURL:        getEnvOr("FRONTEND_URL", "http://localhost:4321/admin"),
+		CookieSameSiteNone: os.Getenv("COOKIE_SAME_SITE_NONE") == "true",
 	}
 }
 

@@ -32,9 +32,10 @@ type AdminHandler struct {
 	promptRepo    domain.PromptRepo
 	suggestRepo   domain.SuggestionsRepo
 	vectorStore   domain.VectorStore
-	allowedEmails []string
-	frontendURL   string // URL of the frontend admin page for OAuth redirect
-	settingsRepo  *sqlite.AdminSettingsRepo
+	allowedEmails      []string
+	frontendURL        string // URL of the frontend admin page for OAuth redirect
+	settingsRepo       *sqlite.AdminSettingsRepo
+	cookieSameSiteNone bool
 }
 
 // NewAdminHandler constructs the admin handler with all dependencies.
@@ -50,6 +51,7 @@ func NewAdminHandler(
 	allowedEmails []string,
 	frontendURL string,
 	settingsRepo *sqlite.AdminSettingsRepo,
+	cookieSameSiteNone bool,
 ) *AdminHandler {
 	if frontendURL == "" {
 		frontendURL = "http://localhost:4321/admin"
@@ -63,9 +65,10 @@ func NewAdminHandler(
 		promptRepo:    promptRepo,
 		suggestRepo:   suggestRepo,
 		vectorStore:   vectorStore,
-		allowedEmails: allowedEmails,
-		frontendURL:   frontendURL,
-		settingsRepo:  settingsRepo,
+		allowedEmails:      allowedEmails,
+		frontendURL:        frontendURL,
+		settingsRepo:       settingsRepo,
+		cookieSameSiteNone: cookieSameSiteNone,
 	}
 }
 
@@ -155,6 +158,11 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 	// Set refresh token as httpOnly cookie (not accessible via JS)
 	if refreshToken != "" {
+		sameSiteMode := http.SameSiteLaxMode
+		if h.cookieSameSiteNone {
+			sameSiteMode = http.SameSiteNoneMode
+		}
+		
 		http.SetCookie(w, &http.Cookie{
 			Name:     "refresh_token",
 			Value:    refreshToken,
@@ -162,7 +170,7 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 			MaxAge:   30 * 24 * 3600, // 30 days
 			HttpOnly: true,
 			Secure:   true,
-			SameSite: http.SameSiteLaxMode,
+			SameSite: sameSiteMode,
 		})
 	}
 

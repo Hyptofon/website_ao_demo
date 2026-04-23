@@ -179,8 +179,6 @@ export default function ChatWidget() {
       },
       onError: (code, message) => {
         if (code === "rate_limit_exceeded") {
-          // Backend embeds retry_after_seconds as structured prefix: __retry:N__message
-          // Falls back to regex on the message string for backward compatibility.
           let secs = 60;
           const prefixMatch = message.match(/^__retry:(\d+)__(.*)$/s);
           if (prefixMatch) {
@@ -193,14 +191,13 @@ export default function ChatWidget() {
           setRateLimit({ blocked: true, retryAfterSec: secs });
           setMessages((prev) => prev.filter((m) => m.id !== assistantId));
           setErrorMsg(message);
+        } else if (code === "network_error" || code === "timeout") {
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          setErrorMsg(language === "uk" ? "Помилка мережі або сервера. Перевірте з'єднання." : "Network or server error. Please check your connection.");
         } else {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantId
-                ? { ...m, content: message, isStreaming: false }
-                : m
-            )
-          );
+          // For other errors, we also show the banner so the user can retry
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          setErrorMsg(message);
         }
         setIsLoading(false);
       },

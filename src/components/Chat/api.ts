@@ -79,9 +79,23 @@ export function streamChat(
       const decoder = new TextDecoder();
       let buffer = "";
 
+      let timeoutId: ReturnType<typeof setTimeout>;
+      const resetTimeout = () => {
+        clearTimeout(timeoutId);
+        timeoutId = setTimeout(() => {
+          controller.abort(new Error("Network timeout: no data received for 15s"));
+        }, 15000);
+      };
+
+      resetTimeout();
+
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        resetTimeout();
+        if (done) {
+          clearTimeout(timeoutId);
+          break;
+        }
 
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split("\n");
@@ -124,8 +138,10 @@ export function streamChat(
         }
       }
     } catch (err) {
-      if ((err as Error).name !== "AbortError") {
+      if ((err as Error).name !== "AbortError" && (err as Error).message !== "Network timeout: no data received for 15s") {
         callbacks.onError("network_error", (err as Error).message);
+      } else if ((err as Error).message === "Network timeout: no data received for 15s") {
+        callbacks.onError("timeout", "Network connection timed out.");
       }
     }
   })();

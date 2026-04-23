@@ -138,6 +138,19 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// C-4: Validate file size BEFORE reading into memory.
+	// ParseMultipartForm(50MB) limits the in-memory form buffer, but the file
+	// itself may be stored in a temp file on disk and still be read entirely
+	// into RAM by io.ReadAll. Reject oversized files here to prevent OOM.
+	const maxFileSize = 50 << 20 // 50 MB — matches ParseMultipartForm limit
+	if header.Size > maxFileSize {
+		slog.Warn("Upload: file too large", "filename", header.Filename, "size", header.Size)
+		jsonError(w, "file_too_large",
+			fmt.Sprintf("File exceeds maximum allowed size of %d MB", maxFileSize>>20),
+			http.StatusRequestEntityTooLarge)
+		return
+	}
+
 	data, err := io.ReadAll(file)
 	if err != nil {
 		slog.Error("Upload: ReadAll file failed", "error", err)

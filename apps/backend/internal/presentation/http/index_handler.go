@@ -373,8 +373,24 @@ func (h *IndexHandler) HandleReindexDocument(w http.ResponseWriter, r *http.Requ
 	}
 
 	// Find the stored file on disk
+	// C-1: Path Traversal protection — canonicalize and verify the path.
+	docsDir, err := filepath.Abs(filepath.Join(".", "data", "documents"))
+	if err != nil {
+		slog.Error("HandleReindexDocument: cannot resolve docsDir", "error", err)
+		jsonError(w, "server_error", "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	ext := strings.ToLower(filepath.Ext(doc.Filename))
-	filePath := filepath.Join(".", "data", "documents", documentID+ext)
+	filePath := filepath.Clean(filepath.Join(docsDir, documentID+ext))
+
+	if !strings.HasPrefix(filePath, docsDir+string(filepath.Separator)) {
+		slog.Error("HandleReindexDocument: path traversal attempt",
+			"documentID", documentID, "filename", doc.Filename, "resolved", filePath)
+		jsonError(w, "forbidden", "Invalid document path", http.StatusForbidden)
+		return
+	}
+
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		jsonError(w, "file_missing", "Raw file not found on disk, cannot re-index", http.StatusNotFound)
 		return

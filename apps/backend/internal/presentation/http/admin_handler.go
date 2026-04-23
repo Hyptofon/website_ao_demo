@@ -399,8 +399,27 @@ func (h *AdminHandler) HandleDownloadDocument(w http.ResponseWriter, r *http.Req
 		return
 	}
 
+	// C-1: Path Traversal protection.
+	// Build and canonicalize both the base documents directory and the target
+	// file path, then assert the file actually lives inside the base dir.
+	// This prevents a compromised Filename value (e.g. "../../etc/passwd")
+	// from escaping the documents sandbox.
+	docsDir, err := filepath.Abs(filepath.Join(".", "data", "documents"))
+	if err != nil {
+		slog.Error("HandleDownloadDocument: cannot resolve docsDir", "error", err)
+		jsonError(w, "server_error", "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	ext := filepath.Ext(doc.Filename)
-	filePath := filepath.Join(".", "data", "documents", docID+strings.ToLower(ext))
+	filePath := filepath.Clean(filepath.Join(docsDir, docID+strings.ToLower(ext)))
+
+	if !strings.HasPrefix(filePath, docsDir+string(filepath.Separator)) {
+		slog.Error("HandleDownloadDocument: path traversal attempt",
+			"docID", docID, "filename", doc.Filename, "resolved", filePath)
+		jsonError(w, "forbidden", "Invalid document path", http.StatusForbidden)
+		return
+	}
 
 	// Ensure file exists
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {

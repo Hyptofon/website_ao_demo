@@ -1,7 +1,7 @@
-import { Shield } from "lucide-react";
+import { AlertTriangle, Shield } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion } from "motion/react";
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { getLoginUrl } from "./api";
 
 const ParticleCanvas = lazy(() =>
@@ -11,16 +11,18 @@ const ParticleCanvas = lazy(() =>
 );
 
 export function LoginScreen({ onAuth }: { onAuth: () => void }) {
+  const [oauthError, setOauthError] = useState(false);
+
   const handleLogin = async () => {
+    setOauthError(false);
     try {
       const url = await getLoginUrl();
       window.location.href = url;
     } catch {
-      const token = window.prompt("Enter Admin Token:");
-      if (token) {
-        localStorage.setItem("admin_jwt", token);
-        onAuth();
-      }
+      // C-2: Never fall back to window.prompt — it is a phishing vector and
+      // accepts any string without server-side validation.
+      // Show a user-facing error instead.
+      setOauthError(true);
     }
   };
 
@@ -101,6 +103,20 @@ export function LoginScreen({ onAuth }: { onAuth: () => void }) {
               </svg>
               Увійти з Google
             </Button>
+
+            {/* C-2: OAuth unavailable error — shown instead of the removed window.prompt fallback */}
+            {oauthError && (
+              <motion.div
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mt-4 flex items-start gap-2.5 rounded-xl border border-amber-500/20 bg-amber-500/[0.07] px-4 py-3 text-left"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-400" />
+                <p className="text-xs leading-relaxed text-amber-300/90">
+                  OAuth недоступний. Зверніться до системного адміністратора.
+                </p>
+              </motion.div>
+            )}
           </motion.div>
         </div>
 

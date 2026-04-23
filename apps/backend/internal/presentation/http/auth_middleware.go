@@ -235,10 +235,11 @@ type csrfEntry struct {
 // Google's OAuth flow typically completes well within 10 minutes.
 const csrfStateTTL = 10 * time.Minute
 
-// csrfStore is a thread-safe in-memory store for OAuth state tokens.
-// Uses RWMutex: multiple concurrent reads (ValidateState checks) are safe,
-// writes (StoreState, delete) acquire an exclusive lock.
-// In production with multiple backend instances, replace with Redis.
+// csrfStoreMaxSize limits the maximum number of in-flight OAuth state tokens.
+// This prevents a DoS attack where an attacker floods /auth/login to exhaust memory.
+// 500 concurrent OAuth flows is generous for any realistic admin use case.
+const csrfStoreMaxSize = 500
+
 var (
 	csrfStore   = make(map[string]csrfEntry)
 	csrfStoreMu sync.RWMutex
@@ -264,10 +265,15 @@ func init() {
 }
 
 // StoreState saves an OAuth state token with a creation timestamp.
-func StoreState(state string) {
+// Returns false if the store is full (DoS protection) — caller must handle this.
+func StoreState(state string) bool {
 	csrfStoreMu.Lock()
 	defer csrfStoreMu.Unlock()
+	if len(csrfStore) >= csrfStoreMaxSize {
+		return false
+	}
 	csrfStore[state] = csrfEntry{createdAt: time.Now()}
+	return true
 }
 
 // ValidateState checks and consumes an OAuth state token (one-time use).

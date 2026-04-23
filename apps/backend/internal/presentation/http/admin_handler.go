@@ -78,7 +78,11 @@ func NewAdminHandler(
 // GET /admin/auth/login
 func (h *AdminHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	state := GenerateState()
-	StoreState(state)
+	if !StoreState(state) {
+		// CSRF store is full — too many in-flight OAuth flows (DoS protection).
+		jsonError(w, "service_unavailable", "Too many pending login attempts, please try again later", http.StatusServiceUnavailable)
+		return
+	}
 
 	authURL := h.oauthSvc.GetAuthURL(state)
 

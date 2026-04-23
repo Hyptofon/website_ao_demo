@@ -65,6 +65,33 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			next.ServeHTTP(w, r)
 		})
 	})
+
+	// W-4 / I-3: Security headers middleware.
+	// Mitigates XSS, clickjacking, MIME-sniffing and referrer leakage.
+	// CSP is especially critical for the admin panel which renders
+	// user-supplied content (document names, audit entries).
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			h := w.Header()
+			h.Set("X-Content-Type-Options", "nosniff")
+			h.Set("X-Frame-Options", "DENY")
+			h.Set("Referrer-Policy", "strict-origin-when-cross-origin")
+			// CSP: allow same-origin scripts/styles only; block inline execution
+			// and framing from other origins. 'unsafe-inline' for style-src is
+			// needed by many CSS-in-JS frontends; remove if your styles are hashed.
+			h.Set("Content-Security-Policy",
+				"default-src 'self'; "+
+					"script-src 'self'; "+
+					"style-src 'self' 'unsafe-inline'; "+
+					"img-src 'self' data: https:; "+
+					"font-src 'self' https:; "+
+					"connect-src 'self'; "+
+					"frame-ancestors 'none'; "+
+					"base-uri 'self'; "+
+					"form-action 'self'")
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   deps.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},

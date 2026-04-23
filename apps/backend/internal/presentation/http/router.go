@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"university-chatbot/backend/internal/domain"
 	"university-chatbot/backend/internal/infrastructure/auth"
@@ -65,7 +66,8 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 		// SQLite ping
 		if deps.DB != nil {
 			if err := deps.DB.PingContext(r.Context()); err != nil {
-				checks["sqlite"] = "error: " + err.Error()
+				// Do NOT expose raw error — it may contain file paths or lock details.
+				checks["sqlite"] = "error"
 			} else {
 				checks["sqlite"] = "ok"
 			}
@@ -86,7 +88,18 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	})
 
 	// ── Prometheus Metrics (TZ §8.2) ──────────────────────────────────────────
-	r.Handle("/metrics", promhttp.Handler())
+	// Restrict to loopback interface only — metrics must not be publicly accessible.
+	r.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		remoteIP := r.RemoteAddr
+		if idx := strings.LastIndex(remoteIP, ":"); idx > 0 {
+			remoteIP = remoteIP[:idx]
+		}
+		if remoteIP != "127.0.0.1" && remoteIP != "::1" && remoteIP != "[::1]" {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		promhttp.Handler().ServeHTTP(w, r)
+	}))
 
 	// ── Public Chat API ────────────────────────────────────────────────────────
 	r.Route("/api/v1", func(r chi.Router) {

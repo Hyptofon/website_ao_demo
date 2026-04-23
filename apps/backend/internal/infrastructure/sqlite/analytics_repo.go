@@ -78,6 +78,9 @@ func (r *AnalyticsRepo) Summary(ctx context.Context, days int) (*domain.Analytic
 }
 
 // TopQueries returns the most frequent query hashes in the last N days.
+// W-2 Fix: query_text is intentionally stored as '' (Privacy-by-Design, TZ §3.4).
+// The old query filtered WHERE query_text != '' which always returned 0 rows.
+// We now group by query_hash (the real de-dup key) and use a privacy-safe label.
 func (r *AnalyticsRepo) TopQueries(ctx context.Context, days, limit int) ([]domain.TopQuery, error) {
 	if limit <= 0 {
 		limit = 20
@@ -85,10 +88,10 @@ func (r *AnalyticsRepo) TopQueries(ctx context.Context, days, limit int) ([]doma
 	since := time.Now().AddDate(0, 0, -days).Format(time.RFC3339)
 
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT query_text as display_name, COUNT(*) as cnt, language, MAX(created_at) as last_seen
+		SELECT query_hash as display_name, COUNT(*) as cnt, language, MAX(created_at) as last_seen
 		FROM queries
-		WHERE created_at >= ? AND is_blocked = 0 AND query_text IS NOT NULL AND query_text != ''
-		GROUP BY display_name
+		WHERE created_at >= ? AND is_blocked = 0
+		GROUP BY query_hash, language
 		ORDER BY cnt DESC
 		LIMIT ?
 	`, since, limit)

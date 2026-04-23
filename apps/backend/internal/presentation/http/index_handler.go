@@ -223,7 +223,13 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath, adminEmail string) {
-	ctx := context.Background()
+	// C-5: Use a bounded context so the goroutine cannot hang forever.
+	// PDF extraction via Gemini API can block indefinitely on network issues;
+	// a 10-minute timeout ensures the job eventually fails rather than
+	// leaking a goroutine and leaving the status stuck at "processing".
+	const uploadTimeout = 10 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	defer cancel()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
 

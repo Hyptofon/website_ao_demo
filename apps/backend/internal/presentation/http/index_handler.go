@@ -210,7 +210,7 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 	})
 }
 
-func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath, adminEmail string) {
+func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath, adminEmail string) {
 	ctx := context.Background()
 	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
 	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
@@ -218,9 +218,9 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 	var text string
 	var err error
 
-	ext := strings.ToLower(filepath[strings.LastIndex(filepath, "."):])
+	ext := strings.ToLower(filepath.Ext(filePath))
 	if ext == ".txt" {
-		data, readErr := os.ReadFile(filepath)
+		data, readErr := os.ReadFile(filePath)
 		if readErr != nil {
 			err = readErr
 		} else {
@@ -228,9 +228,9 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filepath
 		}
 	} else if ext == ".pdf" {
 		_ = h.jobsRepo.UpdateProgress(ctx, jobID, 15, "Extracting text from PDF via Gemini...")
-		text, err = h.pdfExtractor.ExtractText(ctx, filepath)
+		text, err = h.pdfExtractor.ExtractText(ctx, filePath)
 	} else {
-		text, err = parser.ExtractText(filepath)
+		text, err = parser.ExtractText(filePath)
 	}
 
 	if err != nil {

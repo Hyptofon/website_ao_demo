@@ -319,6 +319,9 @@ func (h *AdminHandler) HandleFeedbackStats(w http.ResponseWriter, r *http.Reques
 func (h *AdminHandler) HandleExportCSV(w http.ResponseWriter, r *http.Request) {
 	days := queryInt(r, "days", 30)
 	limit := queryInt(r, "limit", 1000)
+	if limit > 10000 {
+		limit = 10000 // hard cap to prevent OOM on large datasets
+	}
 
 	rows, err := h.analyticsRepo.RecentQueries(r.Context(), days, limit)
 	if err != nil {
@@ -348,6 +351,9 @@ func (h *AdminHandler) HandleExportCSV(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) HandleRecentQueries(w http.ResponseWriter, r *http.Request) {
 	days := queryInt(r, "days", 30)
 	limit := queryInt(r, "limit", 50)
+	if limit > 500 {
+		limit = 500
+	}
 
 	queries, err := h.analyticsRepo.RecentQueries(r.Context(), days, limit)
 	if err != nil {

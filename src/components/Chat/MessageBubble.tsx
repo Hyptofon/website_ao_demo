@@ -56,12 +56,18 @@ export function MessageBubble({ message, lang = "uk", onFeedback }: MessageBubbl
   const [copied, setCopied] = useState(false);
   const t = i18n[lang] ?? i18n.uk;
 
-  const handleFeedback = (value: 1 | -1) => {
+  const handleFeedback = async (value: 1 | -1) => {
     if (message.feedback !== null && message.feedback !== undefined) return;
-    if (message.queryHash) {
-      submitFeedback({ query_hash: message.queryHash, feedback: value });
-    }
+    // Optimistic UI update — show feedback immediately
     onFeedback(message.id, value);
+    if (message.queryHash) {
+      try {
+        await submitFeedback({ query_hash: message.queryHash, feedback: value });
+      } catch (err) {
+        // Best-effort: log but don't revert UI state — the user already saw the feedback
+        console.error("Failed to submit feedback:", err);
+      }
+    }
   };
 
   const handleCopy = async () => {

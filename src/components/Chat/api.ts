@@ -135,11 +135,14 @@ export function streamChat(
 
 /** POST /api/v1/feedback */
 export async function submitFeedback(payload: FeedbackPayload): Promise<void> {
-  await fetch(`${API_BASE}/api/v1/feedback`, {
+  const res = await fetch(`${API_BASE}/api/v1/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
+  if (!res.ok) {
+    throw new Error(`Feedback submission failed: ${res.status}`);
+  }
 }
 
 export interface SuggestedQuestion {

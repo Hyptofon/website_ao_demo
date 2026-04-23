@@ -85,6 +85,11 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// C-6: Sanitize the message to neutralize HTML/JS characters before they
+	// reach the LLM prompt or are echoed back in the SSE stream.
+	// SanitizeInput replaces <, >, &, ", ', ` with their HTML entity equivalents.
+	req.Message = security.SanitizeInput(req.Message)
+
 	chatStart := time.Now()
 
 	// 3. Off-topic filter with side-effect (Ban/Penalty)

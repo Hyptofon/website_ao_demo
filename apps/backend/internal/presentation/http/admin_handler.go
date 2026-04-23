@@ -36,6 +36,9 @@ type AdminHandler struct {
 	frontendURL        string // URL of the frontend admin page for OAuth redirect
 	settingsRepo       *sqlite.AdminSettingsRepo
 	cookieSameSiteNone bool
+	// W-5: refreshCookiePath is the exact server-side path of the refresh endpoint.
+	// Scoping the cookie to this path prevents it from being sent on public routes.
+	refreshCookiePath  string
 }
 
 // NewAdminHandler constructs the admin handler with all dependencies.
@@ -52,6 +55,7 @@ func NewAdminHandler(
 	frontendURL string,
 	settingsRepo *sqlite.AdminSettingsRepo,
 	cookieSameSiteNone bool,
+	refreshCookiePath string,
 ) *AdminHandler {
 	if frontendURL == "" {
 		frontendURL = "http://localhost:4321/admin"
@@ -69,6 +73,7 @@ func NewAdminHandler(
 		frontendURL:        frontendURL,
 		settingsRepo:       settingsRepo,
 		cookieSameSiteNone: cookieSameSiteNone,
+		refreshCookiePath:  refreshCookiePath,
 	}
 }
 
@@ -166,11 +171,19 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 		if h.cookieSameSiteNone {
 			sameSiteMode = http.SameSiteNoneMode
 		}
-		
+
+		// W-5: Scope cookie to the exact refresh endpoint path.
+		// refreshCookiePath is set by the router (e.g. "/admin-{hex32}/auth/refresh")
+		// so the browser only sends this token on that one path, not globally.
+		cookiePath := h.refreshCookiePath
+		if cookiePath == "" {
+			cookiePath = "/admin" // safe fallback — still narrower than "/"
+		}
+
 		http.SetCookie(w, &http.Cookie{
 			Name:     "refresh_token",
 			Value:    refreshToken,
-			Path:     "/",
+			Path:     cookiePath,
 			MaxAge:   30 * 24 * 3600, // 30 days
 			HttpOnly: true,
 			Secure:   true,

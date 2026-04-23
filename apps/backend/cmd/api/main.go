@@ -149,22 +149,21 @@ func main() {
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
 	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
+
+	// Derive admin path segment before building adminHandler so the
+	// refresh cookie path can be computed at construction time (W-5).
+	adminPathSegment := adminPathFromToken(cfg.AdminToken)
+	slog.Info("Admin panel mounted", "path", "/admin-"+adminPathSegment)
+
 	adminHandler := chathttp.NewAdminHandler(
 		oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo,
 		promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails,
 		cfg.FrontendURL, settingsRepo, cfg.CookieSameSiteNone,
+		"/admin-"+adminPathSegment+"/auth/refresh", // W-5: narrow refresh cookie path
 	)
 
 	// ── Presentation: HTTP Router ─────────────────────────────────────────────
-	// Derive admin path segment from ADMIN_TOKEN so the admin URL is
-	// unpredictable to external parties while remaining deterministic
-	// for the configured token value.
-	// e.g. ADMIN_TOKEN='dev-test-token-32chars-longenough'
-	//   → SHA256[:16] bytes → 32 hex chars
-	//   → backend: /admin-7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c
-	//   → frontend: http://localhost:4321/admin-7f3a9b2c1d4e5f6a7b8c9d0e1f2a3b4c
-	adminPathSegment := adminPathFromToken(cfg.AdminToken)
-	slog.Info("Admin panel mounted", "path", "/admin-"+adminPathSegment)
+	// adminPathSegment was already computed above (before adminHandler creation).
 
 	router := chathttp.NewRouter(chathttp.RouterDeps{
 		ChatHandler:      chatHttp,

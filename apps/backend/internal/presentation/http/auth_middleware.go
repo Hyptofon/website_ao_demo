@@ -89,18 +89,23 @@ func CheckAdminAccess(ctx context.Context, email string, allowedEmails []string,
 			slog.Error("Failed to get first_admin_email", "error", err)
 			return false
 		}
-		
+
 		if firstAdmin == "" {
-			// This is the first user! Auto-promote to admin.
-			err := settings.SetFirstAdmin(ctx, email)
+			// C-3 Fix: Use an atomic INSERT OR IGNORE + re-read transaction to
+			// ensure exactly one winner even with concurrent first-logins.
+			// The naive Get()+Set() pattern has a TOCTOU race condition.
+			_, actualAdmin, err := settings.SetFirstAdminAtomic(ctx, email)
 			if err != nil {
-				slog.Error("Failed to set first_admin_email", "error", err)
+				slog.Error("Failed to set first_admin_email atomically", "error", err)
 				return false
 			}
-			slog.Info("Auto-promoted first user to admin", "email", email)
-			return true
+			won := strings.EqualFold(actualAdmin, email)
+			if won {
+				slog.Info("Auto-promoted first user to admin", "email", email)
+			}
+			return won
 		}
-		
+
 		// If auto-admin is already set, only allow that specific email
 		return strings.EqualFold(email, firstAdmin)
 	}

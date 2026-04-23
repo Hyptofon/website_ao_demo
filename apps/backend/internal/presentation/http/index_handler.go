@@ -440,7 +440,10 @@ func (h *IndexHandler) HandleReindexDocument(w http.ResponseWriter, r *http.Requ
 
 // allowedMIMEs maps file extensions to their expected MIME types.
 var allowedMIMEs = map[string][]string{
-	".txt":  {"text/plain"},
+	// I-8: http.DetectContentType can return "application/octet-stream" for valid
+	// UTF-8 text files that start with non-ASCII bytes or lack a BOM. Include it
+	// alongside "text/plain" to avoid false rejections of legitimate .txt uploads.
+	".txt":  {"text/plain", "application/octet-stream"},
 	".pdf":  {"application/pdf"},
 	".docx": {"application/zip", "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "application/octet-stream"},
 	".xlsx": {"application/zip", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "application/octet-stream"},

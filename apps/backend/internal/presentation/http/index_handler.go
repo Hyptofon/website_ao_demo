@@ -195,8 +195,7 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Wait, we can't shadow filepath import if we reuse `filepath` as a variable! 
-	// Ah, the original code had `filepath := tmpFile.Name()`
+
 
 	// Spin background worker — pass admin email from context for audit trail
 	adminEmail := AdminEmailFromCtx(r.Context())

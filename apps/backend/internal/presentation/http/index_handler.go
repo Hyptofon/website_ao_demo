@@ -32,11 +32,19 @@ type IndexHandler struct {
 	metaExtractor *gemini.MetadataExtractor
 	documentRepo  domain.DocumentRepo 
 	auditRepo     domain.AuditRepo   
+	workerSem     chan struct{}
 }
 
 // NewIndexHandler constructs the handler.
 func NewIndexHandler(vs domain.VectorStore, c *chunker.Chunker, pe *parser.PDFExtractor, jobs *sqlite.JobRepository, me *gemini.MetadataExtractor) *IndexHandler {
-	return &IndexHandler{vectorStore: vs, chunker: c, pdfExtractor: pe, jobsRepo: jobs, metaExtractor: me}
+	return &IndexHandler{
+		vectorStore:   vs, 
+		chunker:       c, 
+		pdfExtractor:  pe, 
+		jobsRepo:      jobs, 
+		metaExtractor: me,
+		workerSem:     make(chan struct{}, 3), // Max 3 concurrent background extraction jobs
+	}
 }
 
 // IndexDocumentsFromDir reads all supported files from dir and indexes them into Qdrant.
@@ -223,15 +231,18 @@ func (h *IndexHandler) HandleAdminUpload(w http.ResponseWriter, r *http.Request)
 }
 
 func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath, adminEmail string) {
+	// Wait for a worker slot to prevent unbound goroutine growth and OOM
+	h.workerSem <- struct{}{}
+	defer func() { <-h.workerSem }()
+
 	// C-5: Use a bounded context so the goroutine cannot hang forever.
-	// PDF extraction via Gemini API can block indefinitely on network issues;
-	// a 10-minute timeout ensures the job eventually fails rather than
-	// leaking a goroutine and leaving the status stuck at "processing".
+	// PDF extraction via Gemini API can block indefinitely on network issues.
 	const uploadTimeout = 10 * time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
 	defer cancel()
-	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusProcessing, nil)
-	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 10, "Starting text extraction...")
+
+	_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusProcessing, nil)
+	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 10, "Starting text extraction...")
 
 	var text string
 	var err error
@@ -245,18 +256,18 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath
 			text = string(data)
 		}
 	} else if ext == ".pdf" {
-		_ = h.jobsRepo.UpdateProgress(ctx, jobID, 15, "Extracting text from PDF via Gemini...")
+		_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 15, "Extracting text from PDF via Gemini...")
 		text, err = h.pdfExtractor.ExtractText(ctx, filePath)
 	} else {
 		text, err = parser.ExtractText(filePath)
 	}
 
 	if err != nil {
-		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("extraction error: %w", err))
+		_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusFailed, fmt.Errorf("extraction error: %w", err))
 		return
 	}
 
-	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 30, "Text extracted, detecting metadata...")
+	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 30, "Text extracted, detecting metadata...")
 
 	// --- Auto-detect document metadata via Gemini Structured Output ---
 	lang := "uk"
@@ -272,28 +283,28 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath
 		}
 	}
 
-	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 50, "Splitting document into chunks...")
+	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 50, "Splitting document into chunks...")
 
 	chunks := h.chunker.Chunk(jobID, originalFilename, docType, lang, text)
 	if len(chunks) == 0 {
-		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("no chunks extracted, file might be empty"))
+		_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusFailed, fmt.Errorf("no chunks extracted, file might be empty"))
 		return
 	}
 
-	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 60, fmt.Sprintf("Generating embeddings for %d chunks...", len(chunks)))
+	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 60, fmt.Sprintf("Generating embeddings for %d chunks...", len(chunks)))
 
 	if err := h.vectorStore.UpsertChunks(ctx, chunks); err != nil {
-		_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusFailed, fmt.Errorf("qdrant error: %w", err))
+		_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusFailed, fmt.Errorf("qdrant error: %w", err))
 		return
 	}
 
-	_ = h.jobsRepo.UpdateChunksCount(ctx, jobID, len(chunks))
-	_ = h.jobsRepo.UpdateProgress(ctx, jobID, 100, "Indexing completed")
-	_ = h.jobsRepo.UpdateJobStatus(ctx, jobID, domain.JobStatusCompleted, nil)
+	_ = h.jobsRepo.UpdateChunksCount(context.Background(), jobID, len(chunks))
+	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 100, "Indexing completed")
+	_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusCompleted, nil)
 
 	// Phase 2: Track document in SQLite for admin panel
 	if h.documentRepo != nil {
-		_ = h.documentRepo.Create(ctx, &domain.DocumentRecord{
+		_ = h.documentRepo.Create(context.Background(), &domain.DocumentRecord{
 			ID:         jobID,
 			Filename:   originalFilename,
 			DocType:    docType,

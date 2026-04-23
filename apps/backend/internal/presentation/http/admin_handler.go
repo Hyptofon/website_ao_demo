@@ -430,16 +430,15 @@ func (h *AdminHandler) HandleRenameDocument(w http.ResponseWriter, r *http.Reque
 	}
 
 	if h.auditRepo != nil {
-		adminEmail := "system"
-		if email, ok := r.Context().Value("admin_email").(string); ok {
-			adminEmail = email
-		}
-		_ = h.auditRepo.Record(r.Context(), domain.AuditEntry{
-			AdminEmail: adminEmail,
-			Action:     "rename_document",
-			Target:     fmt.Sprintf("ID: %s, New Name: %s", docID, req.Filename),
-			IP:         realIP(r),
-		})
+		adminEmail := AdminEmailFromCtx(r.Context())
+		go func() {
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
+				AdminEmail: adminEmail,
+				Action:     domain.ActionRenameDocument,
+				Target:     fmt.Sprintf("ID: %s, New Name: %s", docID, req.Filename),
+				IP:         realIP(r),
+			})
+		}()
 	}
 
 	w.WriteHeader(http.StatusOK)

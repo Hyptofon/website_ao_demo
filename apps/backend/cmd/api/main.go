@@ -180,6 +180,15 @@ func main() {
 		AdminPathSegment: adminPathSegment,
 	})
 
+	// ── Start background cleanup goroutines with shutdown context ─────────────
+	// R-2: Use signal.NotifyContext so background goroutines (CSRF cleanup,
+	// rate limiter cleanup) receive a cancellation signal on SIGTERM/SIGINT
+	// and stop cleanly instead of leaking after srv.Shutdown() completes.
+	serverCtx, serverStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer serverStop()
+
+	chathttp.StartCSRFCleanup(serverCtx)
+
 	// ── HTTP Server ────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%d", cfg.Port)
 	srv := &http.Server{
@@ -204,6 +213,7 @@ func main() {
 	// Block until shutdown signal
 	sig := <-quit
 	slog.Info("Received shutdown signal, starting graceful shutdown...", "signal", sig.String())
+	serverStop() // cancel context — stops all context-aware background goroutines
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

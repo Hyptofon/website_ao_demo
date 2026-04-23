@@ -250,21 +250,30 @@ var (
 	csrfStoreMu sync.RWMutex
 )
 
-func init() {
-	// Background cleanup goroutine — evicts expired CSRF tokens every 5 minutes
-	// to prevent unbounded memory growth from abandoned OAuth flows.
+// StartCSRFCleanup starts a background goroutine that evicts expired CSRF state
+// tokens every 5 minutes. It stops when the provided context is cancelled,
+// enabling clean goroutine termination during graceful server shutdown.
+//
+// R-2 Fix: The previous init()-based goroutine had no shutdown mechanism and
+// would keep running (and holding a ticker) after srv.Shutdown() completed.
+func StartCSRFCleanup(ctx context.Context) {
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			csrfStoreMu.Lock()
-			cutoff := time.Now().Add(-csrfStateTTL)
-			for state, entry := range csrfStore {
-				if entry.createdAt.Before(cutoff) {
-					delete(csrfStore, state)
+		for {
+			select {
+			case <-ctx.Done():
+				return // stop on server shutdown
+			case <-ticker.C:
+				csrfStoreMu.Lock()
+				cutoff := time.Now().Add(-csrfStateTTL)
+				for state, entry := range csrfStore {
+					if entry.createdAt.Before(cutoff) {
+						delete(csrfStore, state)
+					}
 				}
+				csrfStoreMu.Unlock()
 			}
-			csrfStoreMu.Unlock()
 		}
 	}()
 }

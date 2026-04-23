@@ -180,16 +180,6 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 		}
 	}
 
-	if h.promptSelector != nil {
-		selection := h.promptSelector.Select(ctx, req.Language)
-		sysPrompt = selection.PromptText
-		variantID = selection.VariantID
-	} else {
-		sysPrompt = domain.SystemPromptUA
-		if req.Language == domain.LangEn {
-			sysPrompt = domain.SystemPromptEN
-		}
-	}
 
 	// --- 5.5. Phase 3: Check response cache before calling LLM ---
 	// Cache key = hash of (query + context), TTL = 1 hour per TZ §4.2.

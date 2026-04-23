@@ -98,12 +98,11 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	queryWords := tokenizeQuery(req.Message)
 
 	for _, r := range results {
-		if r.Score < 0.7 {
-			continue
-		}
-
+		// Hybrid scoring: accept a chunk if it passes the semantic threshold,
+		// OR if it has a moderate score AND contains a keyword from the query.
+		// This implements the intended BM25 approximation from the design doc.
 		hasKeyword := chunkContainsKeyword(r.Chunk.Text, queryWords)
-		if r.Score < 0.5 && !hasKeyword {
+		if r.Score < 0.7 && !(r.Score >= 0.5 && hasKeyword) {
 			continue
 		}
 
@@ -182,8 +181,9 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 
 
 	// --- 5.5. Phase 3: Check response cache before calling LLM ---
-	// Cache key = hash of (query + context), TTL = 1 hour per TZ §4.2.
-	ctxHash := sha256.Sum256([]byte(req.Message + contextBuf.String()))
+	// Cache key = hash of (language + query + context) to avoid cross-language collisions.
+	// TTL = 1 hour per TZ §4.2.
+	ctxHash := sha256.Sum256([]byte(string(req.Language) + req.Message + contextBuf.String()))
 	cacheKey := fmt.Sprintf("resp:%x", ctxHash[:12])
 
 	if h.cache != nil {

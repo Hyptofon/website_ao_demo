@@ -17,11 +17,20 @@ func InitDB(dsn string) (*sql.DB, error) {
 		return nil, fmt.Errorf("sqlite open: %w", err)
 	}
 
-	// Important pragmas for concurrent SQLite access
-	db.Exec("PRAGMA journal_mode=WAL;")
-	db.Exec("PRAGMA busy_timeout=5000;")
-	db.Exec("PRAGMA synchronous=NORMAL;")
-	db.Exec("PRAGMA foreign_keys=ON;")
+	// Important pragmas for concurrent SQLite access.
+	// Log warnings if any pragma fails — a silent failure here can cause
+	// "database is locked" errors under concurrent load (e.g. WAL mode not applied).
+	pragmas := []string{
+		"PRAGMA journal_mode=WAL;",
+		"PRAGMA busy_timeout=5000;",
+		"PRAGMA synchronous=NORMAL;",
+		"PRAGMA foreign_keys=ON;",
+	}
+	for _, p := range pragmas {
+		if _, err := db.Exec(p); err != nil {
+			slog.Warn("SQLite PRAGMA failed", "pragma", p, "error", err)
+		}
+	}
 
 	// SQLite only supports one concurrent writer. Setting max open connections to 1
 	// prevents "database is locked" errors under heavy concurrent load while WAL mode

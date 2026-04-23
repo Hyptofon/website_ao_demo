@@ -234,10 +234,10 @@ export const togglePromptActive = (id: number, isActive: boolean) => api<unknown
   method: "PATCH",
   body: JSON.stringify({ is_active: isActive }),
 });
-export const updatePrompt = (id: number, promptText: string) => api<unknown>(`/admin/prompts/${id}`, {
+export const updatePrompt = (id: number, promptText: string) => api<unknown>(`${ADMIN_BASE}/prompts/${id}`, {
   method: "PATCH",
   body: JSON.stringify({ prompt_text: promptText }),
 });
-export const deletePrompt = (id: number) => api<unknown>(`/admin/prompts/${id}`, {
+export const deletePrompt = (id: number) => api<unknown>(`${ADMIN_BASE}/prompts/${id}`, {
   method: "DELETE",
 });

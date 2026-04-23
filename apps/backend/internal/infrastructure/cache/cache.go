@@ -2,6 +2,7 @@ package cache
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -94,31 +95,34 @@ func (c *RedisCache) command(ctx context.Context, args ...string) (string, error
 }
 
 // extractResult extracts the "result" field from Upstash JSON response.
-// Minimal parsing to avoid json.Unmarshal overhead for simple string values.
+// Uses json.Unmarshal to correctly handle all JSON-encoded values including
+// strings with escaped characters, unicode, and numeric results.
 func extractResult(body string) string {
-	// Fast path: {"result":"value"}
-	prefix := `{"result":"`
-	if strings.HasPrefix(body, prefix) {
-		// Find the closing quote (not the one right after prefix for empty strings)
-		rest := body[len(prefix):]
-		end := strings.Index(rest, `"`)
-		if end >= 0 {
-			return rest[:end]
-		}
+	// Upstash always returns {"result": <value>} where value is a JSON value.
+	var envelope struct {
+		Result *json.RawMessage `json:"result"`
 	}
-	// null result (cache miss)
-	if strings.Contains(body, `"result":null`) {
+	if err := json.Unmarshal([]byte(body), &envelope); err != nil || envelope.Result == nil {
 		return ""
 	}
-	// Integer/boolean result
-	if strings.HasPrefix(body, `{"result":`) {
-		start := len(`{"result":`)
-		end := strings.Index(body[start:], "}")
-		if end > 0 {
-			return body[start : start+end]
+
+	raw := string(*envelope.Result)
+
+	// null → cache miss
+	if raw == "null" {
+		return ""
+	}
+
+	// String result — unmarshal to strip surrounding quotes and unescape
+	if len(raw) >= 2 && raw[0] == '"' {
+		var s string
+		if err := json.Unmarshal([]byte(raw), &s); err == nil {
+			return s
 		}
 	}
-	return ""
+
+	// Numeric or boolean result (e.g. from DEL → 1)
+	return raw
 }
 
 // ─── NoopCache (fallback when Redis is not configured) ──────────────────────

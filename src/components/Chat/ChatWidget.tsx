@@ -22,7 +22,23 @@ const WELCOME_EN =
 
 export default function ChatWidget() {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messages, setMessages] = useState<ChatMessage[]>(() => {
+    if (typeof window !== "undefined") {
+      const stored = sessionStorage.getItem("cb_messages");
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          return parsed.map((m: any) => ({
+            ...m,
+            timestamp: new Date(m.timestamp)
+          }));
+        } catch (e) {
+          console.error("Failed to parse chat history", e);
+        }
+      }
+    }
+    return [];
+  });
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<Language>(() => {
@@ -72,7 +88,14 @@ export default function ChatWidget() {
         },
       ]);
     }
-  }, [isOpen]);
+  }, [isOpen, language, messages.length]);
+
+  // Persist messages to session storage
+  useEffect(() => {
+    if (messages.length > 0) {
+      sessionStorage.setItem("cb_messages", JSON.stringify(messages));
+    }
+  }, [messages]);
 
   // Persist language choice
   const switchLanguage = (lang: Language) => {
@@ -217,6 +240,7 @@ export default function ChatWidget() {
     const newId = generateId();
     sessionIdRef.current = newId;
     sessionStorage.setItem("cb_session_id", newId);
+    sessionStorage.removeItem("cb_messages");
     setMessages([
       {
         id: generateId(),

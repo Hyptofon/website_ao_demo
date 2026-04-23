@@ -79,7 +79,7 @@ export function streamChat(
       const decoder = new TextDecoder();
       let buffer = "";
 
-      let timeoutId: ReturnType<typeof setTimeout>;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
       const resetTimeout = () => {
         clearTimeout(timeoutId);
         timeoutId = setTimeout(() => {

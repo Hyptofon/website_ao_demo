@@ -145,5 +145,9 @@ func (s *OAuthService) GetUserInfo(ctx context.Context, accessToken string) (*Go
 		return nil, fmt.Errorf("oauth: no email in userinfo response")
 	}
 
+	if !info.EmailVerified {
+		return nil, fmt.Errorf("oauth: email %q is not verified by Google", info.Email)
+	}
+
 	return &info, nil
 }

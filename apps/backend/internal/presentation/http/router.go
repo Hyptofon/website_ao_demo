@@ -51,6 +51,20 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.CleanPath)
 	r.Use(middleware.StripSlashes)
+
+	// R-7 / I-2: Global request body size limit.
+	// Applied before any handler so that oversized bodies (e.g. 100 MB JSON)
+	// are rejected at the transport layer. json.Decoder would otherwise read
+	// the entire body before the application-level validator can run.
+	// 1 MB is generous for all API endpoints in this system; the upload
+	// endpoint uses ParseMultipartForm with its own 50 MB limit and does not
+	// go through this path (multipart bodies are parsed differently).
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   deps.AllowedOrigins,
 		AllowedMethods:   []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},

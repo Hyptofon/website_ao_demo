@@ -26,7 +26,7 @@ func RateLimitMiddleware(rl *security.RateLimiter) func(http.Handler) http.Handl
 				payload := map[string]interface{}{
 					"error":               "rate_limit_exceeded",
 					"retry_after_seconds": secs,
-					"message":             fmt.Sprintf("Ви надіслали забагато запитань. Зачекайте %d сек.", secs),
+					"message":             "Rate limit exceeded",
 				}
 
 				if strings.Contains(r.URL.Path, "/stream") {

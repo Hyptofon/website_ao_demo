@@ -46,7 +46,12 @@ export default function ChatWidget() {
       const stored = localStorage.getItem(STORAGE_KEY_LANG);
       if (stored) return stored as Language;
       
-      // Auto-detect if no stored preference
+      // Auto-detect from Astro site <html lang="...">
+      const htmlLang = document.documentElement.lang.toLowerCase();
+      if (htmlLang.startsWith("uk") || htmlLang.startsWith("ru")) return "uk";
+      if (htmlLang.startsWith("en")) return "en";
+
+      // Fallback
       const browserLang = navigator.language.toLowerCase();
       if (browserLang.startsWith("uk") || browserLang.startsWith("ru")) return "uk";
       return "en";
@@ -183,21 +188,26 @@ export default function ChatWidget() {
           const prefixMatch = message.match(/^__retry:(\d+)__(.*)$/s);
           if (prefixMatch) {
             secs = parseInt(prefixMatch[1], 10);
-            message = prefixMatch[2]; // strip the prefix, keep the human message
+            // message = prefixMatch[2]; // we ignore backend message
           } else {
             const legacyMatch = message.match(/(\d+)/);
             if (legacyMatch) secs = parseInt(legacyMatch[1]);
           }
           setRateLimit({ blocked: true, retryAfterSec: secs });
           setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-          setErrorMsg(message);
+          setErrorMsg(language === "uk" 
+            ? `Забагато запитів. Зачекайте ${secs} сек.` 
+            : `Too many requests. Please wait ${secs} sec.`);
         } else if (code === "network_error" || code === "timeout") {
           setMessages((prev) => prev.filter((m) => m.id !== assistantId));
           setErrorMsg(language === "uk" ? "Помилка мережі або сервера. Перевірте з'єднання." : "Network or server error. Please check your connection.");
-        } else {
-          // For other errors, we also show the banner so the user can retry
+        } else if (code === "validation_error") {
           setMessages((prev) => prev.filter((m) => m.id !== assistantId));
-          setErrorMsg(message);
+          setErrorMsg(language === "uk" ? "Недійсний запит. Перевірте текст і спробуйте ще раз." : "Invalid request. Check your text and try again.");
+        } else {
+          // For other unknown errors, fallback to backend message or generic error
+          setMessages((prev) => prev.filter((m) => m.id !== assistantId));
+          setErrorMsg(language === "uk" ? `Помилка: ${message}` : `Error: ${message}`);
         }
         setIsLoading(false);
       },

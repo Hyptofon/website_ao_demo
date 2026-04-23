@@ -43,15 +43,16 @@ export default function ChatWidget() {
   const [isLoading, setIsLoading] = useState(false);
   const [language, setLanguage] = useState<Language>(() => {
     if (typeof window !== "undefined") {
+      // 1. Auto-detect from Astro site <html lang="..."> (Highest priority)
+      const htmlLang = document.documentElement.lang.toLowerCase();
+      if (htmlLang.startsWith("en")) return "en";
+      if (htmlLang.startsWith("uk") || htmlLang.startsWith("ru")) return "uk";
+
+      // 2. Previously manually selected language
       const stored = localStorage.getItem(STORAGE_KEY_LANG);
       if (stored) return stored as Language;
-      
-      // Auto-detect from Astro site <html lang="...">
-      const htmlLang = document.documentElement.lang.toLowerCase();
-      if (htmlLang.startsWith("uk") || htmlLang.startsWith("ru")) return "uk";
-      if (htmlLang.startsWith("en")) return "en";
 
-      // Fallback
+      // 3. Browser default fallback
       const browserLang = navigator.language.toLowerCase();
       if (browserLang.startsWith("uk") || browserLang.startsWith("ru")) return "uk";
       return "en";
@@ -94,6 +95,22 @@ export default function ChatWidget() {
       ]);
     }
   }, [isOpen, language, messages.length]);
+
+  // Dynamically translate the welcome message if language changes
+  useEffect(() => {
+    setMessages((prev) => {
+      if (prev.length > 0 && prev[0].role === "assistant") {
+        const currentContent = prev[0].content;
+        const targetContent = language === "uk" ? WELCOME_UA : WELCOME_EN;
+        if ((currentContent === WELCOME_UA || currentContent === WELCOME_EN) && currentContent !== targetContent) {
+          const newMessages = [...prev];
+          newMessages[0] = { ...newMessages[0], content: targetContent };
+          return newMessages;
+        }
+      }
+      return prev;
+    });
+  }, [language]);
 
   // Persist messages to session storage
   useEffect(() => {

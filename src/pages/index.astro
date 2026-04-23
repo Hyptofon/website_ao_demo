@@ -9,7 +9,6 @@ import { InnovativeEducation } from "@/routes/home/sections/InnovativeEducation"
 import { NewsAndEvents } from "@/routes/home/sections/NewsAndEvents";
 import { Footer } from "@/components/layout/Footer";
 import { LazyIntroAnimation } from "@/components/effects/LazyIntroAnimation";
-import ChatWidget from "@/components/Chat/ChatWidget";
 import { getTranslations } from "@/i18n";
 import type { Locale } from "@/i18n";
 import { getDepartments } from "@/routes/departments/departments-programs";
@@ -101,6 +100,4 @@ const organizationJsonLd = {
       </main>
     </div>
   </div>
-  <!-- AI Chat Assistant Widget -->
-  <ChatWidget client:load />
 </Layout>

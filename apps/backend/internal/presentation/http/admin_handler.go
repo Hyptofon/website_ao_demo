@@ -648,8 +648,21 @@ func (h *AdminHandler) HandleListSuggestions(w http.ResponseWriter, r *http.Requ
 		jsonError(w, "db_error", "Failed to list suggestions", http.StatusInternalServerError)
 		return
 	}
-	if questions == nil {
-		questions = []domain.SuggestedQuestion{}
+
+	if len(questions) == 0 {
+		if lang == domain.LangEn {
+			questions = []domain.SuggestedQuestion{
+				{ID: -1, Question: "What specialties are available?", Language: lang},
+				{ID: -2, Question: "How much is the tuition?", Language: lang},
+				{ID: -3, Question: "What documents are required?", Language: lang},
+			}
+		} else {
+			questions = []domain.SuggestedQuestion{
+				{ID: -1, Question: "Які спеціальності доступні?", Language: lang},
+				{ID: -2, Question: "Яка вартість навчання?", Language: lang},
+				{ID: -3, Question: "Які документи потрібні для вступу?", Language: lang},
+			}
+		}
 	}
 
 	w.Header().Set("Content-Type", "application/json")

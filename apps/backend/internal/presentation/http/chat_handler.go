@@ -85,6 +85,13 @@ func (h *ChatHandler) StreamChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 2.5 Auto-detect language based on query text (Overrides browser setting)
+	if containsCyrillic(req.Message) {
+		req.Language = domain.LangUk
+	} else {
+		req.Language = domain.LangEn
+	}
+
 	// C-6: Sanitize the message to neutralize HTML/JS characters before they
 	// reach the LLM prompt or are echoed back in the SSE stream.
 	// SanitizeInput replaces <, >, &, ", ', ` with their HTML entity equivalents.
@@ -272,4 +279,17 @@ func realIP(r *http.Request) string {
 		return addr[:idx]
 	}
 	return addr
+}
+
+// containsCyrillic checks if the text contains any Cyrillic letters.
+// Used for automatic language detection.
+func containsCyrillic(text string) bool {
+	for _, r := range text {
+		// Basic Cyrillic block: U+0400 to U+04FF
+		// Supplemental block: U+0500 to U+052F
+		if (r >= '\u0400' && r <= '\u04FF') || (r >= '\u0500' && r <= '\u052F') {
+			return true
+		}
+	}
+	return false
 }

@@ -79,15 +79,33 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	hash := sha256.Sum256([]byte(strings.TrimSpace(req.Message)))
 	queryHash := fmt.Sprintf("%x", hash[:8])
 
+	// --- 1.5. Query Translation for English (to match Ukrainian DB) ---
+	searchQuery := req.Message
+	if req.Language == domain.LangEn {
+		var tr struct {
+			Translated string `json:"translated"`
+		}
+		prompt := "You are a professional translator. Translate the following user query to Ukrainian. " +
+			"Return ONLY a JSON object with a single key 'translated' containing the translation. " +
+			"Do not add any explanations or markdown. Query: " + req.Message
+
+		if err := h.llm.GenerateJSON(ctx, prompt, &tr); err == nil && tr.Translated != "" {
+			searchQuery = tr.Translated
+			slog.Info("Query translated for vector search", "original", req.Message, "translated", searchQuery)
+		} else {
+			slog.Warn("Failed to translate query, using original", "error", err)
+		}
+	}
+
 	// --- 2. Hybrid search for relevant context ---
-	results, err := h.vectorStore.HybridSearch(ctx, req.Message, 20) // Retrieve up to 20 chunks
+	results, err := h.vectorStore.HybridSearch(ctx, searchQuery, 20) // Retrieve up to 20 chunks
 	if err != nil {
 		return nil, fmt.Errorf("vector search: %w", err)
 	}
 
 	// --- 2.5. Optional reranking (Phase 3) ---
 	if h.reranker != nil {
-		results = h.reranker.Rerank(ctx, req.Message, results)
+		results = h.reranker.Rerank(ctx, searchQuery, results)
 	}
 
 	// --- 3. Build context string from top chunks with hybrid scoring ---
@@ -95,7 +113,7 @@ func (h *AskBotHandler) Handle(ctx context.Context, q AskBotQuery, w io.Writer) 
 	sources := make([]domain.Source, 0, len(results))
 	seenDocs := make(map[string]bool)
 
-	queryWords := tokenizeQuery(req.Message)
+	queryWords := tokenizeQuery(searchQuery)
 
 	for _, r := range results {
 		// Hybrid scoring: accept a chunk if it passes the semantic threshold,

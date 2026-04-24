@@ -241,3 +241,62 @@ export const updatePrompt = (id: number, promptText: string) => api<unknown>(`${
 export const deletePrompt = (id: number) => api<unknown>(`${ADMIN_BASE}/prompts/${id}`, {
   method: "DELETE",
 });
+
+// ─── Logout ─────────────────────────────────────────────────────────────────
+
+/** Calls the backend logout endpoint, clears the refresh cookie, and removes local JWT. */
+export const logout = async (): Promise<void> => {
+  try {
+    // POST to backend to invalidate refresh cookie and record audit entry.
+    await api<unknown>(`${ADMIN_BASE}/auth/logout`, { method: "POST" });
+  } finally {
+    clearToken();
+  }
+};
+
+// ─── Admin Management ────────────────────────────────────────────────────────
+
+export interface AdminUser {
+  id: number;
+  email: string;
+  added_by: string;
+  added_at: string;
+}
+
+export const fetchAdmins = () => api<AdminUser[]>(`${ADMIN_BASE}/admins`);
+
+export const addAdmin = (email: string) => api<AdminUser>(`${ADMIN_BASE}/admins`, {
+  method: "POST",
+  body: JSON.stringify({ email }),
+});
+
+export const removeAdmin = (email: string) => api<unknown>(`${ADMIN_BASE}/admins/${encodeURIComponent(email)}`, {
+  method: "DELETE",
+});
+
+// ─── Reindex ─────────────────────────────────────────────────────────────────
+
+export interface ReindexAllResult {
+  status: string;
+  count: number;
+}
+
+/** Triggers re-indexing of a single document. Returns job_id for polling. */
+export const reindexDocument = (documentId: string) =>
+  api<{ status: string; document_id: string }>(`${ADMIN_BASE}/documents/${documentId}/reindex`, {
+    method: "POST",
+  });
+
+/** Triggers re-indexing of all documents in the knowledge base. */
+export const reindexAll = () =>
+  api<ReindexAllResult>(`${ADMIN_BASE}/documents/reindex-all`, {
+    method: "POST",
+  });
+
+/** Polls a single document's indexing job status. */
+export const pollJobStatus = async (jobId: string, authHeaders: Record<string, string>) => {
+  const res = await fetch(`${API_BASE}${ADMIN_BASE}/documents/jobs/${jobId}`, { headers: authHeaders });
+  if (!res.ok) throw new Error("Failed to check status");
+  return res.json() as Promise<{ status: string; error: string; progress: number; current_step: string }>;
+};
+

@@ -90,7 +90,7 @@ func main() {
 	defer db.Close()
 	slog.Info("SQLite ready", "path", cfg.DBPath)
 
-	// ── Infrastructure: Repositories ───────────────────────────────────────────
+	// ── Infrastructure: Repositories ─────────────────────────────────────────
 	analyticsRepo, err := sqlite.NewAnalyticsRepo(db)
 	if err != nil {
 		log.Fatalf("SQLite analytics repo init: %v", err)
@@ -101,9 +101,12 @@ func main() {
 	promptRepo := sqlite.NewPromptRepo(db)
 	suggestionsRepo := sqlite.NewSuggestionsRepo(db)
 	settingsRepo := sqlite.NewAdminSettingsRepo(db)
+	adminUsersRepo := sqlite.NewAdminUsersRepo(db)
 
-	// ── Infrastructure: Security ───────────────────────────────────────────────
+	// ── Infrastructure: Security ───────────────────────────────────────────
 	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
+	// TZ §3.5: separate rate limiter for admin API — 100 requests per minute
+	adminRateLimiter := security.NewRateLimiter(100, time.Minute, 1)
 	offTopicFilter := security.NewOffTopicFilter()
 
 	// ── Infrastructure: Cache and Memory (Phase 3) ─────────────────────────────
@@ -157,7 +160,7 @@ func main() {
 
 	adminHandler := chathttp.NewAdminHandler(
 		oauthSvc, jwtSvc, analyticsRepo, auditRepo, documentRepo,
-		promptRepo, suggestionsRepo, qdrantClient, cfg.AdminAllowedEmails,
+		promptRepo, suggestionsRepo, adminUsersRepo, qdrantClient, cfg.AdminAllowedEmails,
 		cfg.FrontendURL, settingsRepo, cfg.CookieSameSiteNone,
 		"/admin-"+adminPathSegment+"/auth/refresh", // W-5: narrow refresh cookie path
 	)
@@ -170,6 +173,7 @@ func main() {
 		AdminHandler:     adminHandler,
 		IndexHandler:     indexHandler,
 		RateLimiter:      rateLimiter,
+		AdminRateLimiter: adminRateLimiter,
 		AuditRepo:        auditRepo,
 		JWTService:       jwtSvc,
 		AdminToken:       cfg.AdminToken,

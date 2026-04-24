@@ -1,13 +1,57 @@
 import { useCallback, useEffect, useState } from "react";
-import { FileText, Upload, Trash2, FileUp, Eye, PencilLine, MoreVertical, AlertTriangle, Loader2 } from "lucide-react";
+import {
+  FileText, Upload, Trash2, FileUp, Eye, PencilLine,
+  MoreVertical, AlertTriangle, Loader2, RotateCw, RefreshCw, Download
+} from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "motion/react";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
-import { fetchDocuments, uploadDocument, deleteDocument, renameDocument, getDocumentDownloadUrl, type DocumentRecord } from "./api";
+import {
+  fetchDocuments, uploadDocument, deleteDocument, renameDocument,
+  getDocumentDownloadUrl, reindexDocument, reindexAll, getToken,
+  type DocumentRecord
+} from "./api";
 import { AnimatedSection, GlassCard, Badge, TabLoader, EmptyState } from "./ui";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
-function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, onDelete: (id: string, n: string) => void, onRename: (id: string, oldName: string, newName: string) => void, onPreview: (id: string) => void }) {
+// ─── Progress bar component ──────────────────────────────────────────────────
+
+function ProgressBar({ progress, step }: { progress: number; step: string }) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-center justify-between text-[11px]">
+        <span className="text-zinc-400">{step || "Обробляємо..."}</span>
+        <span className="font-medium text-zinc-300 tabular-nums">{progress}%</span>
+      </div>
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]">
+        <motion.div
+          className="h-full rounded-full bg-gradient-to-r from-blue-600 to-cyan-400"
+          initial={{ width: 0 }}
+          animate={{ width: `${progress}%` }}
+          transition={{ duration: 0.4, ease: "easeOut" }}
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Document row ────────────────────────────────────────────────────────────
+
+function DocumentRow({
+  d,
+  onDelete,
+  onRename,
+  onPreview,
+  onReindex,
+  reindexing,
+}: {
+  d: DocumentRecord;
+  onDelete: (id: string, n: string) => void;
+  onRename: (id: string, oldName: string, newName: string) => void;
+  onPreview: (id: string) => void;
+  onReindex: (id: string) => void;
+  reindexing: boolean;
+}) {
   const [isRenaming, setIsRenaming] = useState(false);
   const [editName, setEditName] = useState(d.filename);
 
@@ -51,8 +95,18 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
             onKeyDown={handleKeyDown}
           />
         ) : (
-          <span className="truncate max-w-[180px] cursor-pointer hover:text-blue-400 transition-colors" onClick={() => setIsRenaming(true)} title="Клікніть для перейменування">
+          <span
+            className="truncate max-w-[180px] cursor-pointer hover:text-blue-400 transition-colors"
+            onClick={() => setIsRenaming(true)}
+            title="Клікніть для перейменування"
+          >
             {d.filename}
+          </span>
+        )}
+        {/* Reindexing indicator */}
+        {reindexing && (
+          <span title="Реіндексація...">
+            <Loader2 size={13} className="animate-spin text-blue-400 shrink-0" aria-label="Реіндексація..." />
           </span>
         )}
       </td>
@@ -67,7 +121,7 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
               <MoreVertical size={16} />
             </button>
           </DropdownMenu.Trigger>
-          
+
           <DropdownMenu.Portal>
             <DropdownMenu.Content
               sideOffset={5}
@@ -88,9 +142,17 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
                 <PencilLine size={15} className="text-amber-400" />
                 Перейменувати
               </DropdownMenu.Item>
-              
+              <DropdownMenu.Item
+                onSelect={() => onReindex(d.id)}
+                disabled={reindexing}
+                className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-zinc-300 outline-none transition-colors data-[highlighted]:bg-white/10 data-[highlighted]:text-white data-[disabled]:opacity-40 data-[disabled]:cursor-not-allowed"
+              >
+                <RotateCw size={15} className="text-purple-400" />
+                Реіндексувати
+              </DropdownMenu.Item>
+
               <DropdownMenu.Separator className="my-1.5 h-px w-full bg-white/10" />
-              
+
               <DropdownMenu.Item
                 onSelect={() => setTimeout(() => onDelete(d.id, d.filename), 0)}
                 className="flex cursor-pointer select-none items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium text-red-400 outline-none transition-colors data-[highlighted]:bg-red-500/15 data-[highlighted]:text-red-300"
@@ -106,13 +168,20 @@ function DocumentRow({ d, onDelete, onRename, onPreview }: { d: DocumentRecord, 
   );
 }
 
+// ─── DocumentsTab ────────────────────────────────────────────────────────────
+
 export function DocumentsTab() {
   const [docs, setDocs] = useState<DocumentRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState<{ progress: number; step: string } | null>(null);
   const [dragging, setDragging] = useState(false);
-  
-  // Delete Modal State
+  const [reindexingAll, setReindexingAll] = useState(false);
+
+  // Per-document reindexing state
+  const [reindexingIds, setReindexingIds] = useState<Set<string>>(new Set());
+
+  // Delete modal
   const [deleteTarget, setDeleteTarget] = useState<{id: string, name: string} | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteLoading, setDeleteLoading] = useState(false);
@@ -126,16 +195,67 @@ export function DocumentsTab() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Upload with real-time progress tracking
   const doUpload = async (file: File) => {
     setUploading(true);
+    setUploadProgress({ progress: 0, step: "Завантаження файлу..." });
+
     try {
-      await uploadDocument(file);
-      toast.success(`${file.name} завантажено`);
+      const token = getToken();
+      const h: Record<string, string> = {};
+      if (token) h["Authorization"] = `Bearer ${token}`;
+
+      const fd = new FormData();
+      fd.append("file", file);
+
+      const uploadRes = await fetch(
+        `${(import.meta.env.PUBLIC_API_URL ?? "http://localhost:8080")}/admin-${import.meta.env.PUBLIC_ADMIN_PATH ?? "panel"}/documents/upload`,
+        { method: "POST", headers: h, body: fd }
+      );
+      if (!uploadRes.ok) throw new Error(await uploadRes.text());
+
+      const { job_id } = await uploadRes.json() as { job_id: string };
+
+      // Poll for progress
+      const startedAt = Date.now();
+      await new Promise<void>((resolve, reject) => {
+        const check = async () => {
+          if (Date.now() - startedAt > 5 * 60 * 1000) {
+            reject(new Error("Час очікування закінчився (5 хв)"));
+            return;
+          }
+          try {
+            const jobRes = await fetch(
+              `${import.meta.env.PUBLIC_API_URL ?? "http://localhost:8080"}/admin-${import.meta.env.PUBLIC_ADMIN_PATH ?? "panel"}/documents/jobs/${job_id}`,
+              { headers: h }
+            );
+            if (!jobRes.ok) throw new Error("Failed to check status");
+            const job = await jobRes.json() as { status: string; error: string; progress: number; current_step: string };
+
+            setUploadProgress({ progress: job.progress, step: job.current_step || "Обробляємо..." });
+
+            if (job.status === "completed") {
+              resolve();
+            } else if (job.status === "failed") {
+              reject(new Error(job.error || "Upload failed during processing"));
+            } else {
+              setTimeout(check, 1200);
+            }
+          } catch (err) {
+            reject(err);
+          }
+        };
+        setTimeout(check, 800);
+      });
+
+      toast.success(`${file.name} успішно завантажено та індексовано`);
       await load();
-    } catch (err: any) { 
-      toast.error(err?.message || "Помилка завантаження"); 
+    } catch (err: any) {
+      toast.error(err?.message || "Помилка завантаження");
+    } finally {
+      setUploading(false);
+      setUploadProgress(null);
     }
-    finally { setUploading(false); }
   };
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -161,12 +281,12 @@ export function DocumentsTab() {
     setDeleteLoading(true);
     try {
       await deleteDocument(deleteTarget.id);
-      setDocs((prev) => prev.filter((d) => d.id !== deleteTarget.id));
+      setDocs(prev => prev.filter(d => d.id !== deleteTarget.id));
       toast.success(`${deleteTarget.name} видалено`);
       setDeleteOpen(false);
       setTimeout(() => load(), 300);
-    } catch { 
-      toast.error("Помилка видалення"); 
+    } catch {
+      toast.error("Помилка видалення");
     } finally {
       setDeleteLoading(false);
     }
@@ -176,26 +296,22 @@ export function DocumentsTab() {
     if (!newName || newName === currentName) return;
     try {
       await renameDocument(id, newName);
-      setDocs((prev) => prev.map((d) => d.id === id ? { ...d, filename: newName } : d));
-      toast.success("Документ розпізнано і перейменовано!");
+      setDocs(prev => prev.map(d => d.id === id ? { ...d, filename: newName } : d));
+      toast.success("Документ перейменовано");
     } catch {
       toast.error("Помилка при перейменуванні");
     }
   };
 
   const handlePreview = (id: string) => {
-    const token = localStorage.getItem("admin_jwt");
-    // Append token as query param so we can view in a new tab without modifying fetch headers
-    // Actually simpler to just open it, the download endpoint isn't strictly gated by JWT if we allow CORS, but wait!
-    // Since we open a new window, headers are lost. We might get 401 if it's protected.
-    // We should fetch it as BLOB and create object URL.
+    const token = getToken();
     fetch(getDocumentDownloadUrl(id), {
       headers: { "Authorization": `Bearer ${token}` }
     })
       .then(r => {
         if (!r.ok) {
-           if (r.status === 404) throw new Error("Файл не знайдено (можливо, це старий документ)");
-           throw new Error("Помилка доступу");
+          if (r.status === 404) throw new Error("Файл не знайдено (можливо, це старий документ)");
+          throw new Error("Помилка доступу");
         }
         return r.blob();
       })
@@ -204,30 +320,127 @@ export function DocumentsTab() {
         window.open(url, "_blank");
         setTimeout(() => URL.revokeObjectURL(url), 10000);
       })
-      .catch((e) => toast.error(e.message));
+      .catch(e => toast.error(e.message));
+  };
+
+  const handleReindex = async (docId: string) => {
+    setReindexingIds(prev => new Set([...prev, docId]));
+    try {
+      await reindexDocument(docId);
+      toast.success("Реіндексацію розпочато. Це може зайняти кілька хвилин.");
+      // Refresh after a short delay to pick up any status changes
+      setTimeout(() => load(), 3000);
+    } catch (err: any) {
+      toast.error(err?.message || "Помилка реіндексації");
+    } finally {
+      // Remove from reindexing set after 30s (enough for background job to start)
+      setTimeout(() => {
+        setReindexingIds(prev => {
+          const next = new Set(prev);
+          next.delete(docId);
+          return next;
+        });
+      }, 30000);
+    }
+  };
+
+  const handleReindexAll = async () => {
+    if (docs.length === 0) return;
+    setReindexingAll(true);
+    try {
+      const result = await reindexAll();
+      toast.success(`Реіндексацію всіх ${result.count} документів розпочато. Це займе кілька хвилин.`);
+    } catch (err: any) {
+      toast.error(err?.message || "Помилка при запуску реіндексації");
+    } finally {
+      setTimeout(() => setReindexingAll(false), 5000);
+    }
+  };
+
+  const handleExportCSV = () => {
+    const token = getToken();
+    const API_BASE = import.meta.env.PUBLIC_API_URL ?? "http://localhost:8080";
+    const ADMIN_PATH = import.meta.env.PUBLIC_ADMIN_PATH ?? "panel";
+    const url = `${API_BASE}/admin-${ADMIN_PATH}/analytics/export/csv?days=30`;
+    fetch(url, { headers: { "Authorization": `Bearer ${token}` } })
+      .then(r => {
+        if (!r.ok) throw new Error("Помилка завантаження CSV");
+        return r.blob();
+      })
+      .then(blob => {
+        const a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = `analytics_${new Date().toISOString().slice(0, 10)}.csv`;
+        a.click();
+        URL.revokeObjectURL(a.href);
+        toast.success("CSV завантажено");
+      })
+      .catch(e => toast.error(e.message));
   };
 
   if (loading) return <TabLoader />;
 
   return (
     <div className="space-y-6">
+      {/* Header */}
       <AnimatedSection i={0} className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-white">Документи бази знань</h2>
           <p className="mt-0.5 text-xs text-zinc-600">{docs.length} документів у базі</p>
         </div>
-        <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-600/15 transition-all hover:shadow-blue-600/25 hover:from-blue-500 hover:to-blue-400">
-          <Upload size={16} />
-          {uploading ? "Завантаження..." : "Завантажити"}
-          <input type="file" accept=".pdf,.docx,.xlsx,.txt" onChange={handleUpload} hidden disabled={uploading} />
-        </label>
+        <div className="flex items-center gap-2">
+          {/* CSV Export button */}
+          <button
+            onClick={handleExportCSV}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-white/[0.08] bg-white/[0.04] px-4 py-2.5 text-sm font-medium text-zinc-400 transition-all hover:bg-white/[0.07] hover:text-zinc-200"
+            title="Експорт аналітики у CSV"
+          >
+            <Download size={15} />
+            CSV
+          </button>
+
+          {/* Reindex all button */}
+          <button
+            onClick={handleReindexAll}
+            disabled={reindexingAll || docs.length === 0}
+            className="inline-flex cursor-pointer items-center gap-2 rounded-xl border border-purple-500/20 bg-purple-500/5 px-4 py-2.5 text-sm font-medium text-purple-400 transition-all hover:bg-purple-500/10 hover:text-purple-300 disabled:cursor-not-allowed disabled:opacity-40"
+            title="Реіндексувати всі документи"
+          >
+            <RefreshCw size={15} className={reindexingAll ? "animate-spin" : ""} />
+            {reindexingAll ? "Реіндексація..." : "Реіндекс всіх"}
+          </button>
+
+          {/* Upload button */}
+          <label className="inline-flex cursor-pointer items-center gap-2 rounded-xl bg-gradient-to-r from-blue-600 to-blue-500 px-4 py-2.5 text-sm font-medium text-white shadow-lg shadow-blue-600/15 transition-all hover:shadow-blue-600/25 hover:from-blue-500 hover:to-blue-400">
+            <Upload size={16} />
+            {uploading ? "Завантаження..." : "Завантажити"}
+            <input type="file" accept=".pdf,.docx,.xlsx,.txt" onChange={handleUpload} hidden disabled={uploading} />
+          </label>
+        </div>
       </AnimatedSection>
 
-      {/* Info Block */}
+      {/* Upload progress */}
+      <AnimatePresence>
+        {uploading && uploadProgress && (
+          <motion.div
+            initial={{ opacity: 0, y: -8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+          >
+            <AnimatedSection i={0.3}>
+              <GlassCard title="Індексація документа" icon={Loader2}>
+                <ProgressBar progress={uploadProgress.progress} step={uploadProgress.step} />
+              </GlassCard>
+            </AnimatedSection>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Info block */}
       <AnimatedSection i={0.5}>
         <div className="rounded-xl border border-blue-500/20 bg-blue-500/5 p-4 text-[13px] leading-relaxed text-blue-100/80">
-          <strong className="text-blue-300">Як користуватися цією сторінкою:</strong> Ця сторінка — це «мозок» вашого чат-бота. 
-          Завантажуйте сюди офіційні документи, загальні положення, накази та довідники (підтримуються PDF, DOCX, XLSX, TXT). 
+          <strong className="text-blue-300">Як користуватися цією сторінкою:</strong> Ця сторінка — це «мозок» вашого чат-бота.
+          Завантажуйте сюди офіційні документи, загальні положення, накази та довідники (підтримуються PDF, DOCX, XLSX, TXT).
           Бот зможе читати ці файли та надавати точні відповіді студентам на їх основі. Чим актуальніші документи, тим якісніша допомога бота.
         </div>
       </AnimatedSection>
@@ -284,6 +497,8 @@ export function DocumentsTab() {
                         onRename={handleRename}
                         onDelete={handleDelete}
                         onPreview={handlePreview}
+                        onReindex={handleReindex}
+                        reindexing={reindexingIds.has(d.id)}
                       />
                     ))}
                   </AnimatePresence>
@@ -306,19 +521,19 @@ export function DocumentsTab() {
             </DialogTitle>
           </DialogHeader>
           <div className="text-center text-sm text-zinc-400 mb-6">
-            Ви впевнені, що хочете безповоротно видалити <span className="font-bold text-zinc-200">"{deleteTarget?.name}"</span> з бази знань? 
+            Ви впевнені, що хочете безповоротно видалити <span className="font-bold text-zinc-200">"{deleteTarget?.name}"</span> з бази знань?
             Бот більше не зможе читати цей файл.
           </div>
           <div className="flex gap-3">
-            <button 
+            <button
               onClick={() => setDeleteOpen(false)}
               className="flex-1 py-2.5 rounded-xl text-sm font-medium text-zinc-400 bg-zinc-800/50 hover:text-white hover:bg-zinc-800 transition-colors"
             >
               Скасувати
             </button>
-            <button 
-              onClick={confirmDelete} 
-              disabled={deleteLoading} 
+            <button
+              onClick={confirmDelete}
+              disabled={deleteLoading}
               className="flex-1 inline-flex justify-center items-center gap-2 rounded-xl bg-rose-500 text-white px-4 py-2.5 text-sm font-bold shadow-lg shadow-rose-500/20 transition-all hover:bg-rose-400 disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {deleteLoading ? <Loader2 className="animate-spin" size={16} /> : "Видалити"}

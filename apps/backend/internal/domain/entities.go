@@ -148,6 +148,12 @@ var (
 
 	// ErrDocumentNotFound is returned when a document record does not exist.
 	ErrDocumentNotFound = errors.New("document not found")
+
+	// ErrAdminAlreadyExists is returned when trying to add a duplicate admin.
+	ErrAdminAlreadyExists = errors.New("admin user already exists")
+
+	// ErrAdminNotFound is returned when trying to remove a non-existent admin.
+	ErrAdminNotFound = errors.New("admin user not found")
 )
 
 // ─── Phase 2: Admin & Audit ─────────────────────────────────────────────────
@@ -162,9 +168,12 @@ const (
 	ActionDeleteDocument   AdminAction = "delete_document"
 	ActionRenameDocument   AdminAction = "rename_document"
 	ActionReindexDocument  AdminAction = "reindex_document"
+	ActionReindexAll       AdminAction = "reindex_all"
 	ActionExportCSV        AdminAction = "export_csv"
 	ActionViewAnalytics    AdminAction = "view_analytics"
 	ActionViewAuditLog     AdminAction = "view_audit_log"
+	ActionAddAdmin         AdminAction = "add_admin"
+	ActionRemoveAdmin      AdminAction = "remove_admin"
 )
 
 // AuditEntry records a single admin action for the audit log.
@@ -188,6 +197,14 @@ type DocumentRecord struct {
 	Summary    string    `json:"summary,omitempty"`
 	UploadedBy string    `json:"uploaded_by"` // admin email
 	UploadedAt time.Time `json:"uploaded_at"`
+}
+
+// AdminUser represents an authorized administrator.
+type AdminUser struct {
+	ID      int64     `json:"id"`
+	Email   string    `json:"email"`
+	AddedBy string    `json:"added_by"`
+	AddedAt time.Time `json:"added_at"`
 }
 
 // ─── Phase 2: Extended Analytics ─────────────────────────────────────────────

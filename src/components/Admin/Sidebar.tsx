@@ -1,17 +1,20 @@
 import {
   BarChart3, FileText, MessageCircle,
-  LogOut, Activity, MessageSquareDashed
+  LogOut, Activity, MessageSquareDashed,
+  Shield, Users
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { motion } from "motion/react";
 
-export type Tab = "overview" | "documents" | "queries" | "prompts";
+export type Tab = "overview" | "documents" | "queries" | "prompts" | "audit" | "admins";
 
 const NAV: { id: Tab; label: string; icon: React.ReactNode }[] = [
   { id: "overview", label: "Аналітика", icon: <BarChart3 size={18} strokeWidth={1.8} /> },
   { id: "documents", label: "Документи", icon: <FileText size={18} strokeWidth={1.8} /> },
   { id: "queries", label: "Запити", icon: <MessageCircle size={18} strokeWidth={1.8} /> },
   { id: "prompts", label: "A/B Промпти", icon: <MessageSquareDashed size={18} strokeWidth={1.8} /> },
+  { id: "audit", label: "Audit Log", icon: <Shield size={18} strokeWidth={1.8} /> },
+  { id: "admins", label: "Адміністратори", icon: <Users size={18} strokeWidth={1.8} /> },
 ];
 
 export function Sidebar({

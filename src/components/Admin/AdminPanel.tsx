@@ -2,15 +2,17 @@
 // Uses client:only="react" in Astro for full client-side rendering.
 
 import { useState, useEffect } from "react";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { AnimatePresence, motion } from "motion/react";
-import { getToken, clearToken } from "./api";
+import { getToken, clearToken, logout as apiLogout } from "./api";
 import { LoginScreen } from "./LoginScreen";
 import { Sidebar, type Tab } from "./Sidebar";
 import { OverviewTab } from "./OverviewTab";
 import { DocumentsTab } from "./DocumentsTab";
 import { QueriesTab } from "./QueriesTab";
 import { PromptsTab } from "./PromptsTab";
+import { AuditTab } from "./AuditTab";
+import { AdminsTab } from "./AdminsTab";
 import { RefreshCw } from "lucide-react";
 
 export default function AdminPanel() {
@@ -29,26 +31,35 @@ export default function AdminPanel() {
     let urlToken: string | null = null;
 
     if (window.location.hash) {
-      const hashParams = new URLSearchParams(window.location.hash.slice(1)); // strip leading '#'
+      const hashParams = new URLSearchParams(window.location.hash.slice(1));
       urlToken = hashParams.get("token");
     }
 
     if (!urlToken) {
-      // Backward-compat: legacy query-param path
       const params = new URLSearchParams(window.location.search);
       urlToken = params.get("token");
     }
 
     if (urlToken) {
       localStorage.setItem("admin_jwt", urlToken);
-      // Clear both fragment and query param from the address bar immediately.
-      // history.replaceState does not trigger a page reload.
       window.history.replaceState({}, "", window.location.pathname);
     }
 
     setAuthed(!!getToken());
     setReady(true);
   }, []);
+
+  const handleLogout = async () => {
+    try {
+      // POST to backend: clears HttpOnly refresh cookie + records audit entry
+      await apiLogout();
+    } catch {
+      // Even if server call fails, clear local token anyway
+      clearToken();
+    }
+    setAuthed(false);
+    toast.success("Ви вийшли з системи");
+  };
 
   if (!ready) {
     return (
@@ -85,7 +96,7 @@ export default function AdminPanel() {
       <Sidebar
         active={tab}
         onChange={setTab}
-        onLogout={() => { clearToken(); setAuthed(false); }}
+        onLogout={handleLogout}
       />
 
       {/* Main content */}
@@ -103,6 +114,8 @@ export default function AdminPanel() {
               {tab === "documents" && <DocumentsTab />}
               {tab === "queries" && <QueriesTab />}
               {tab === "prompts" && <PromptsTab />}
+              {tab === "audit" && <AuditTab />}
+              {tab === "admins" && <AdminsTab />}
             </motion.div>
           </AnimatePresence>
         </div>

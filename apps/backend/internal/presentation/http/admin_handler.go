@@ -31,6 +31,7 @@ type AdminHandler struct {
 	documentRepo  domain.DocumentRepo
 	promptRepo    domain.PromptRepo
 	suggestRepo   domain.SuggestionsRepo
+	adminUsersRepo domain.AdminUsersRepo
 	vectorStore   domain.VectorStore
 	allowedEmails      []string
 	frontendURL        string // URL of the frontend admin page for OAuth redirect
@@ -50,6 +51,7 @@ func NewAdminHandler(
 	documentRepo domain.DocumentRepo,
 	promptRepo domain.PromptRepo,
 	suggestRepo domain.SuggestionsRepo,
+	adminUsersRepo domain.AdminUsersRepo,
 	vectorStore domain.VectorStore,
 	allowedEmails []string,
 	frontendURL string,
@@ -61,14 +63,15 @@ func NewAdminHandler(
 		frontendURL = "http://localhost:4321/admin"
 	}
 	return &AdminHandler{
-		oauthSvc:      oauthSvc,
-		jwtSvc:        jwtSvc,
-		analyticsRepo: analyticsRepo,
-		auditRepo:     auditRepo,
-		documentRepo:  documentRepo,
-		promptRepo:    promptRepo,
-		suggestRepo:   suggestRepo,
-		vectorStore:   vectorStore,
+		oauthSvc:       oauthSvc,
+		jwtSvc:         jwtSvc,
+		analyticsRepo:  analyticsRepo,
+		auditRepo:      auditRepo,
+		documentRepo:   documentRepo,
+		promptRepo:     promptRepo,
+		suggestRepo:    suggestRepo,
+		adminUsersRepo: adminUsersRepo,
+		vectorStore:    vectorStore,
 		allowedEmails:      allowedEmails,
 		frontendURL:        frontendURL,
 		settingsRepo:       settingsRepo,
@@ -249,6 +252,44 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 		"token":      newToken,
 		"expires_in": "86400",
 	})
+}
+
+// HandleLogout invalidates the admin session (clears refresh cookie) and records
+// the logout event in the audit log.
+// POST /admin/auth/logout
+// TZ §3.3: audit log must include login/logout events.
+func (h *AdminHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
+	adminEmail := AdminEmailFromCtx(r.Context())
+
+	// Clear the HttpOnly refresh token cookie immediately.
+	cookiePath := h.refreshCookiePath
+	if cookiePath == "" {
+		cookiePath = "/admin"
+	}
+	http.SetCookie(w, &http.Cookie{
+		Name:     "refresh_token",
+		Value:    "",
+		Path:     cookiePath,
+		MaxAge:   -1, // delete immediately
+		HttpOnly: true,
+		Secure:   true,
+	})
+
+	// Record logout in audit log asynchronously.
+	if h.auditRepo != nil {
+		go func() {
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
+				AdminEmail: adminEmail,
+				Action:     domain.ActionLogout,
+				Target:     "session",
+				IP:         realIP(r),
+			})
+		}()
+	}
+
+	slog.Info("Admin logout", "email", adminEmail)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "logged_out"})
 }
 
 // ─── Analytics Endpoints ────────────────────────────────────────────────────
@@ -709,4 +750,133 @@ func queryInt(r *http.Request, key string, defaultVal int) int {
 		return defaultVal
 	}
 	return v
+}
+
+// ─── Admin User Management Endpoints ────────────────────────────────────────
+// TZ §3.3: «Додаткові адміни додаються через існуючого адміна»
+
+// HandleListAdmins returns the list of all registered administrators.
+// GET /admin/admins
+func (h *AdminHandler) HandleListAdmins(w http.ResponseWriter, r *http.Request) {
+	if h.adminUsersRepo == nil {
+		jsonError(w, "not_configured", "Admin management not available", http.StatusInternalServerError)
+		return
+	}
+
+	admins, err := h.adminUsersRepo.List(r.Context())
+	if err != nil {
+		slog.Error("List admins failed", "error", err)
+		jsonError(w, "db_error", "Failed to list admins", http.StatusInternalServerError)
+		return
+	}
+	if admins == nil {
+		admins = []domain.AdminUser{}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(admins)
+}
+
+// HandleAddAdmin registers a new administrator.
+// POST /admin/admins
+// Body: {"email": "new@admin.com"}
+func (h *AdminHandler) HandleAddAdmin(w http.ResponseWriter, r *http.Request) {
+	if h.adminUsersRepo == nil {
+		jsonError(w, "not_configured", "Admin management not available", http.StatusInternalServerError)
+		return
+	}
+
+	var req struct {
+		Email string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		jsonError(w, "invalid_request", "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	// Validate email format (basic: must contain @ and a dot after it)
+	req.Email = strings.TrimSpace(strings.ToLower(req.Email))
+	if req.Email == "" || !strings.Contains(req.Email, "@") || !strings.Contains(req.Email[strings.Index(req.Email, "@"):], ".") {
+		jsonError(w, "validation_error", "Valid email is required", http.StatusBadRequest)
+		return
+	}
+
+	callerEmail := AdminEmailFromCtx(r.Context())
+
+	admin, err := h.adminUsersRepo.Add(r.Context(), req.Email, callerEmail)
+	if err != nil {
+		if err == domain.ErrAdminAlreadyExists {
+			jsonError(w, "already_exists", "This email is already an administrator", http.StatusConflict)
+			return
+		}
+		slog.Error("Add admin failed", "error", err, "email", req.Email)
+		jsonError(w, "db_error", "Failed to add administrator", http.StatusInternalServerError)
+		return
+	}
+
+	// Audit log
+	if h.auditRepo != nil {
+		go func() {
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
+				AdminEmail: callerEmail,
+				Action:     domain.ActionAddAdmin,
+				Target:     req.Email,
+				IP:         realIP(r),
+			})
+		}()
+	}
+
+	slog.Info("Admin added", "email", req.Email, "by", callerEmail)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(admin)
+}
+
+// HandleRemoveAdmin removes an administrator.
+// DELETE /admin/admins/{email}
+func (h *AdminHandler) HandleRemoveAdmin(w http.ResponseWriter, r *http.Request) {
+	if h.adminUsersRepo == nil {
+		jsonError(w, "not_configured", "Admin management not available", http.StatusInternalServerError)
+		return
+	}
+
+	targetEmail := chi.URLParam(r, "email")
+	if targetEmail == "" {
+		jsonError(w, "missing_email", "Email parameter is required", http.StatusBadRequest)
+		return
+	}
+
+	callerEmail := AdminEmailFromCtx(r.Context())
+
+	// Prevent self-removal
+	if strings.EqualFold(targetEmail, callerEmail) {
+		jsonError(w, "cannot_self_remove", "You cannot remove yourself from admins", http.StatusBadRequest)
+		return
+	}
+
+	if err := h.adminUsersRepo.Delete(r.Context(), targetEmail); err != nil {
+		if err == domain.ErrAdminNotFound {
+			jsonError(w, "not_found", "Admin user not found", http.StatusNotFound)
+			return
+		}
+		slog.Error("Remove admin failed", "error", err, "email", targetEmail)
+		jsonError(w, "db_error", "Failed to remove administrator", http.StatusInternalServerError)
+		return
+	}
+
+	// Audit log
+	if h.auditRepo != nil {
+		go func() {
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
+				AdminEmail: callerEmail,
+				Action:     domain.ActionRemoveAdmin,
+				Target:     targetEmail,
+				IP:         realIP(r),
+			})
+		}()
+	}
+
+	slog.Info("Admin removed", "email", targetEmail, "by", callerEmail)
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "removed", "email": targetEmail})
 }

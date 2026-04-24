@@ -446,6 +446,95 @@ func (h *IndexHandler) HandleReindexDocument(w http.ResponseWriter, r *http.Requ
 	})
 }
 
+// HandleReindexAll handles POST /admin/documents/reindex-all.
+// Re-indexes every document in the knowledge base sequentially in a background goroutine.
+// Returns immediately with an accepted status; actual progress can be monitored via job endpoints.
+// TZ §3.3: «Примусова ре-індексація … всієї бази».
+func (h *IndexHandler) HandleReindexAll(w http.ResponseWriter, r *http.Request) {
+	if h.documentRepo == nil {
+		jsonError(w, "not_configured", "Document repository not configured", http.StatusInternalServerError)
+		return
+	}
+
+	docs, err := h.documentRepo.List(r.Context())
+	if err != nil {
+		slog.Error("ReindexAll: failed to list documents", "error", err)
+		jsonError(w, "db_error", "Failed to list documents", http.StatusInternalServerError)
+		return
+	}
+
+	if len(docs) == 0 {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "nothing_to_reindex",
+			"count":  0,
+		})
+		return
+	}
+
+	docsDir, err := filepath.Abs(filepath.Join(".", "data", "documents"))
+	if err != nil {
+		slog.Error("ReindexAll: cannot resolve docsDir", "error", err)
+		jsonError(w, "server_error", "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	adminEmail := AdminEmailFromCtx(r.Context())
+
+	// Snapshot doc list — safe to iterate outside request context.
+	type docEntry struct {
+		id       string
+		filename string
+		filePath string
+	}
+	var queue []docEntry
+	for _, doc := range docs {
+		ext := strings.ToLower(filepath.Ext(doc.Filename))
+		filePath := filepath.Clean(filepath.Join(docsDir, doc.ID+ext))
+		// Skip files not present on disk (CLI-indexed docs without stored file).
+		if _, statErr := os.Stat(filePath); os.IsNotExist(statErr) {
+			slog.Warn("ReindexAll: file not on disk, skipping", "doc_id", doc.ID, "filename", doc.Filename)
+			continue
+		}
+		queue = append(queue, docEntry{id: doc.ID, filename: doc.Filename, filePath: filePath})
+	}
+
+	// Launch a single coordinating goroutine that processes docs sequentially
+	// (respecting the workerSem pool) so we don't launch len(docs) goroutines at once.
+	go func() {
+		slog.Info("ReindexAll: starting", "total_docs", len(queue), "admin", adminEmail)
+		for _, entry := range queue {
+			// Delete old chunks before re-indexing.
+			if err := h.vectorStore.DeleteByDocumentID(context.Background(), entry.id); err != nil {
+				slog.Error("ReindexAll: failed to delete old chunks", "doc_id", entry.id, "error", err)
+				// Continue with next document — partial reindex is better than none.
+				continue
+			}
+			h.processBackgroundUpload(entry.id, entry.filename, entry.filePath, adminEmail)
+		}
+		slog.Info("ReindexAll: completed", "total_docs", len(queue))
+	}()
+
+	if h.auditRepo != nil {
+		go func() {
+			_ = h.auditRepo.Record(context.Background(), domain.AuditEntry{
+				AdminEmail: adminEmail,
+				Action:     domain.ActionReindexAll,
+				Target:     fmt.Sprintf("all_docs: %d", len(queue)),
+				IP:         "",
+			})
+		}()
+	}
+
+	slog.Info("ReindexAll: accepted", "doc_count", len(queue), "admin", adminEmail)
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusAccepted)
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"status": "reindex_all_started",
+		"count":  len(queue),
+	})
+}
+
 // ── MIME-type validation ─────────────────────────────────────────────────────
 // TZ §3.5 / §6.1: Validate actual file content, not just extension.
 

@@ -171,3 +171,19 @@ type SuggestionsRepo interface {
 	// DeleteAuto removes all auto-generated suggestions for refresh.
 	DeleteAuto(ctx context.Context, lang Language) error
 }
+
+// AdminUsersRepo manages the list of authorized administrators.
+// TZ §3.3: «Додаткові адміни додаються через існуючого адміна».
+type AdminUsersRepo interface {
+	// List returns all registered admin users.
+	List(ctx context.Context) ([]AdminUser, error)
+
+	// Add registers a new admin user. Returns ErrAdminAlreadyExists if duplicate.
+	Add(ctx context.Context, email, addedBy string) (*AdminUser, error)
+
+	// Delete removes an admin user by email. Returns ErrAdminNotFound if missing.
+	Delete(ctx context.Context, email string) error
+
+	// Exists checks whether an email is a registered admin.
+	Exists(ctx context.Context, email string) (bool, error)
+}

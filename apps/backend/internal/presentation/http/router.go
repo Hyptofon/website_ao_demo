@@ -28,6 +28,7 @@ type RouterDeps struct {
 	AdminHandler     *AdminHandler
 	IndexHandler     *IndexHandler
 	RateLimiter      *security.RateLimiter
+	AdminRateLimiter *security.RateLimiter // TZ §3.5: 100 req/min for admin API
 	AuditRepo        domain.AuditRepo
 	JWTService       *auth.JWTService
 	AdminToken       string
@@ -167,6 +168,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	// All admin routes are mounted at /admin-{randomHex32} to make the
 	// admin surface unpredictable. The path segment is derived from ADMIN_TOKEN.
 	r.Route(adminPrefix, func(r chi.Router) {
+		// TZ §3.5: separate rate limit for admin API (100 req/min)
+		if deps.AdminRateLimiter != nil {
+			r.Use(RateLimitMiddleware(deps.AdminRateLimiter))
+		}
+
 		// Dual auth: JWT OR Admin-Token
 		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails, deps.AdminSettings))
 
@@ -175,12 +181,18 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			r.Use(AuditMiddleware(deps.AuditRepo))
 		}
 
+		// Auth management (logout requires JWT auth)
+		if deps.AdminHandler != nil {
+			r.Post("/auth/logout", deps.AdminHandler.HandleLogout)
+		}
+
 		// Document management
 		if deps.IndexHandler != nil {
 			r.Post("/documents/upload", deps.IndexHandler.HandleAdminUpload)
 			r.Get("/documents/jobs/{job_id}", deps.IndexHandler.GetJobStatus)
 			r.Delete("/documents/{document_id}", deps.IndexHandler.HandleDeleteDocument)
 			r.Post("/documents/{document_id}/reindex", deps.IndexHandler.HandleReindexDocument)
+			r.Post("/documents/reindex-all", deps.IndexHandler.HandleReindexAll)
 		}
 
 		// Admin panel endpoints
@@ -213,6 +225,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 			// Suggested questions
 			r.Get("/suggestions", deps.AdminHandler.HandleListSuggestions)
 			r.Post("/suggestions", deps.AdminHandler.HandleCreateSuggestion)
+
+			// Admin user management (TZ §3.3)
+			r.Get("/admins", deps.AdminHandler.HandleListAdmins)
+			r.Post("/admins", deps.AdminHandler.HandleAddAdmin)
+			r.Delete("/admins/{email}", deps.AdminHandler.HandleRemoveAdmin)
 		}
 	})
 

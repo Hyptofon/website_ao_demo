@@ -168,6 +168,18 @@ var migrations = []migration{
 			updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 		);`,
 	},
+	{
+		Version:     8,
+		Description: "admin_users table for multi-admin management",
+		SQL: `
+		CREATE TABLE IF NOT EXISTS admin_users (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			email TEXT NOT NULL UNIQUE,
+			added_by TEXT NOT NULL DEFAULT 'system',
+			added_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
+		);
+		CREATE INDEX IF NOT EXISTS idx_admin_users_email ON admin_users(email);`,
+	},
 }
 
 func runMigrations(db *sql.DB) error {

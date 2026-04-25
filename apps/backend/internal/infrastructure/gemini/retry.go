@@ -2,6 +2,7 @@ package gemini
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"math"
@@ -10,6 +11,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"university-chatbot/backend/internal/domain"
 )
 
 // ─── Retry with Exponential Backoff ──────────────────────────────────────────
@@ -87,6 +89,13 @@ func withRetry[T any](ctx context.Context, operationName string, maxAttempts int
 	}
 
 	var zero T
+	// Wrap the final error with ErrLLMOverloaded if the failure was due to
+	// rate limiting or service unavailability. This enables typed error
+	// checking via errors.Is() in callers (replaces brittle strings.Contains).
+	if isOverloadError(lastErr) {
+		return zero, fmt.Errorf("%s: all %d attempts failed: %w: %w",
+			operationName, maxAttempts, domain.ErrLLMOverloaded, lastErr)
+	}
 	return zero, fmt.Errorf("%s: all %d attempts failed: %w", operationName, maxAttempts, lastErr)
 }
 
@@ -118,6 +127,31 @@ func isRetryableError(err error) bool {
 	errStr := err.Error()
 	for _, marker := range retryableErrors {
 		if strings.Contains(errStr, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isOverloadError checks if the error specifically represents a rate-limit
+// or service-unavailable condition (429 / 503) — used to wrap with ErrLLMOverloaded.
+func isOverloadError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, domain.ErrLLMOverloaded) {
+		return true // already wrapped
+	}
+	if st, ok := status.FromError(err); ok {
+		switch st.Code() {
+		case codes.Unavailable, codes.ResourceExhausted:
+			return true
+		}
+	}
+	errStr := err.Error()
+	overloadMarkers := []string{"503", "429", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "ServiceUnavailable"}
+	for _, m := range overloadMarkers {
+		if strings.Contains(errStr, m) {
 			return true
 		}
 	}

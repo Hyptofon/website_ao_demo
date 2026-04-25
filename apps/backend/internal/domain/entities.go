@@ -5,6 +5,13 @@ import (
 	"time"
 )
 
+// ─── Sentinel Errors ─────────────────────────────────────────────────────────
+
+// ErrLLMOverloaded is returned by the LLM client when the upstream API
+// responds with 429 (rate limit) or 503 (service unavailable).
+// Use errors.Is(err, domain.ErrLLMOverloaded) instead of strings.Contains.
+var ErrLLMOverloaded = errors.New("llm_overloaded")
+
 // ─── Core Domain Entities ────────────────────────────────────────────────────
 
 // Language represents supported UI/query languages.

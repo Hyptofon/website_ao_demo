@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -173,7 +174,9 @@ func (h *ChatHandler) handleRAGError(err error, req *domain.ChatRequest, w http.
 		msg = domain.RAGErrorResponseUA
 	}
 
-	if strings.Contains(err.Error(), "503") || strings.Contains(err.Error(), "UNAVAILABLE") || strings.Contains(err.Error(), "429") {
+	// M-8 Fix: Use typed error check instead of brittle strings.Contains.
+	// ErrLLMOverloaded is wrapped by withRetry when Gemini returns 429/503.
+	if errors.Is(err, domain.ErrLLMOverloaded) {
 		msg = domain.OverloadResponseEN
 		if req.Language == domain.LangUk {
 			msg = domain.OverloadResponseUA

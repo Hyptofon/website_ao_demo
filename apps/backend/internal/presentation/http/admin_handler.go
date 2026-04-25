@@ -217,7 +217,7 @@ func (h *AdminHandler) HandleCallback(w http.ResponseWriter, r *http.Request) {
 
 // HandleRefreshToken exchanges a valid refresh token for a new access token.
 // POST /admin/auth/refresh
-// TZ §3.3: «refresh-token на 30 днів»
+// TZ §3.3: «refresh-token на 30 дні»
 func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie("refresh_token")
 	if err != nil || cookie.Value == "" {
@@ -229,6 +229,21 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 	if err != nil {
 		jsonError(w, "invalid_refresh_token", "Refresh token is invalid or expired", http.StatusUnauthorized)
 		return
+	}
+
+	// C-2 Fix: Check if the refresh token has been revoked (e.g. by a prior logout).
+	// IsRefreshTokenValid compares claims.IssuedAt against the stored revoke timestamp.
+	if h.settingsRepo != nil {
+		valid, err := h.settingsRepo.IsRefreshTokenValid(r.Context(), claims.Email, claims.IssuedAt)
+		if err != nil {
+			slog.Error("Failed to check refresh token revocation", "email", claims.Email, "error", err)
+			jsonError(w, "server_error", "Failed to validate refresh token", http.StatusInternalServerError)
+			return
+		}
+		if !valid {
+			jsonError(w, "token_revoked", "Refresh token has been revoked", http.StatusUnauthorized)
+			return
+		}
 	}
 
 	// Check access (whitelist or auto-admin)
@@ -260,6 +275,16 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 // TZ §3.3: audit log must include login/logout events.
 func (h *AdminHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	adminEmail := AdminEmailFromCtx(r.Context())
+
+	// C-2 Fix: Record revocation timestamp so existing refresh tokens become invalid.
+	// This is the server-side logout: even if the client keeps the cookie, the token
+	// is rejected by HandleRefreshToken because iat <= revoke_time.
+	if h.settingsRepo != nil && adminEmail != "" {
+		if err := h.settingsRepo.RevokeRefreshTokens(context.Background(), adminEmail); err != nil {
+			slog.Error("Failed to revoke refresh tokens on logout", "email", adminEmail, "error", err)
+			// Non-fatal: continue with logout; the cookie is still cleared.
+		}
+	}
 
 	// Clear the HttpOnly refresh token cookie immediately.
 	cookiePath := h.refreshCookiePath

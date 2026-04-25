@@ -3,7 +3,9 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"log/slog"
+	"time"
 )
 
 // AdminSettingsRepo manages system-level admin settings in SQLite.
@@ -104,4 +106,39 @@ func (r *AdminSettingsRepo) SetFirstAdminAtomic(ctx context.Context, email strin
 	// If stored == email then our INSERT won the race.
 	won := stored == email
 	return won, stored, nil
+}
+
+// ─── Refresh Token Revocation ─────────────────────────────────────────────────
+// Stateless revocation without a blacklist table: we store the "revoke timestamp"
+// per email in admin_settings. A refresh token is valid only if its iat (issued-at)
+// is strictly after the latest revoke timestamp.
+// This invalidates ALL refresh tokens for the user on logout — clean and simple.
+
+// RevokeRefreshTokens records the current time as the revocation timestamp for email.
+// All refresh tokens issued before (and at) this moment become invalid.
+func (r *AdminSettingsRepo) RevokeRefreshTokens(ctx context.Context, email string) error {
+	return r.Set(ctx, revokeKey(email), fmt.Sprintf("%d", time.Now().Unix()))
+}
+
+// IsRefreshTokenValid returns true if the token's IssuedAt is after the last
+// revocation timestamp for the email. Returns true if no revocation has been recorded.
+func (r *AdminSettingsRepo) IsRefreshTokenValid(ctx context.Context, email string, issuedAt int64) (bool, error) {
+	val, err := r.Get(ctx, revokeKey(email))
+	if err != nil {
+		return false, err
+	}
+	if val == "" {
+		return true, nil // never revoked
+	}
+	var revokeUnix int64
+	if _, err := fmt.Sscanf(val, "%d", &revokeUnix); err != nil {
+		return false, fmt.Errorf("corrupt revoke timestamp for %q: %w", email, err)
+	}
+	// Token must have been issued strictly AFTER the revocation time.
+	return issuedAt > revokeUnix, nil
+}
+
+// revokeKey returns the admin_settings key for the refresh revocation timestamp.
+func revokeKey(email string) string {
+	return "refresh_revoke:" + email
 }

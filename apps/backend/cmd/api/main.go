@@ -195,6 +195,22 @@ func main() {
 		AdminSettings:    settingsRepo,
 		AdminPathSegment: adminPathSegment,
 		MetricsToken:     cfg.MetricsToken,
+		HealthChecks: map[string]func(context.Context) error{
+			"sqlite": func(ctx context.Context) error { return db.PingContext(ctx) },
+			"redis": func(ctx context.Context) error {
+				if cacheStore != nil {
+					_, err := cacheStore.Get(ctx, "health_ping")
+					return err
+				}
+				return nil
+			},
+			"qdrant": func(ctx context.Context) error {
+				if qdrantClient != nil {
+					return qdrantClient.EnsureCollection(ctx)
+				}
+				return nil
+			},
+		},
 	})
 
 	// ── Start background cleanup goroutines ───────────────────────────────────

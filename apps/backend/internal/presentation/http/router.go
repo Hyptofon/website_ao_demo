@@ -45,6 +45,8 @@ type RouterDeps struct {
 	// Bearer authentication (for external Prometheus scrapers on Railway, etc.).
 	// If empty, /metrics is restricted to 127.0.0.1 / ::1 only.
 	MetricsToken string
+	// HealthChecks contains optional external service checks (DB, Redis, etc.)
+	HealthChecks map[string]func(context.Context) error
 }
 
 // NewRouter constructs the chi router with all routes and middleware.
@@ -109,23 +111,16 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	// ── Deep Healthcheck (Pattern #6) ──────────────────────────────────────────
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		checks := map[string]string{"api": "ok"}
-
-		// SQLite ping
-		if deps.DB != nil {
-			if err := deps.DB.PingContext(r.Context()); err != nil {
-				// Do NOT expose raw error — it may contain file paths or lock details.
-				checks["sqlite"] = "error"
-			} else {
-				checks["sqlite"] = "ok"
-			}
-		}
-
-		// Determine overall status
 		status := http.StatusOK
-		for _, v := range checks {
-			if v != "ok" {
-				status = http.StatusServiceUnavailable
-				break
+
+		if deps.HealthChecks != nil {
+			for name, checkFn := range deps.HealthChecks {
+				if err := checkFn(r.Context()); err != nil {
+					checks[name] = "error"
+					status = http.StatusServiceUnavailable
+				} else {
+					checks[name] = "ok"
+				}
 			}
 		}
 

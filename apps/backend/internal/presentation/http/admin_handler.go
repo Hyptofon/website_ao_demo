@@ -231,16 +231,16 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// C-2 Fix: Check if the refresh token has been revoked (e.g. by a prior logout).
-	// IsRefreshTokenValid compares claims.IssuedAt against the stored revoke timestamp.
-	if h.settingsRepo != nil {
-		valid, err := h.settingsRepo.IsRefreshTokenValid(r.Context(), claims.Email, claims.IssuedAt)
+	// C-2 Fix: Check if the specific refresh token (JTI) has been revoked (e.g. by logout).
+	// This provides granular multi-session control (one logout doesn't kill all sessions).
+	if h.settingsRepo != nil && claims.JTI != "" {
+		revoked, err := h.settingsRepo.IsJTIRevoked(r.Context(), claims.JTI)
 		if err != nil {
-			slog.Error("Failed to check refresh token revocation", "email", claims.Email, "error", err)
+			slog.Error("Failed to check refresh token revocation", "jti", claims.JTI, "error", err)
 			jsonError(w, "server_error", "Failed to validate refresh token", http.StatusInternalServerError)
 			return
 		}
-		if !valid {
+		if revoked {
 			jsonError(w, "token_revoked", "Refresh token has been revoked", http.StatusUnauthorized)
 			return
 		}
@@ -276,13 +276,20 @@ func (h *AdminHandler) HandleRefreshToken(w http.ResponseWriter, r *http.Request
 func (h *AdminHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 	adminEmail := AdminEmailFromCtx(r.Context())
 
-	// C-2 Fix: Record revocation timestamp so existing refresh tokens become invalid.
-	// This is the server-side logout: even if the client keeps the cookie, the token
-	// is rejected by HandleRefreshToken because iat <= revoke_time.
-	if h.settingsRepo != nil && adminEmail != "" {
-		if err := h.settingsRepo.RevokeRefreshTokens(context.Background(), adminEmail); err != nil {
-			slog.Error("Failed to revoke refresh tokens on logout", "email", adminEmail, "error", err)
-			// Non-fatal: continue with logout; the cookie is still cleared.
+	// C-2 Fix / Granular Revocation: Revoke the specific refresh token's JTI.
+	// This ensures that only the current session is logged out, keeping other sessions active.
+	if h.settingsRepo != nil {
+		cookie, err := r.Cookie("refresh_token")
+		if err == nil && cookie.Value != "" {
+			// Extract JTI from the refresh token. Even if expired, we can still blacklist it.
+			claims, _ := h.jwtSvc.ValidateRefreshToken(cookie.Value)
+			// Alternatively, if it fails validation we might still want to revoke it if we can parse it.
+			// For simplicity, we just use the validated claims.
+			if claims != nil && claims.JTI != "" {
+				if err := h.settingsRepo.RevokeJTI(context.Background(), claims.JTI, claims.ExpiresAt); err != nil {
+					slog.Error("Failed to revoke JTI on logout", "jti", claims.JTI, "error", err)
+				}
+			}
 		}
 	}
 

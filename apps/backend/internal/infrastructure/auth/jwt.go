@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/google/uuid"
 )
 
 // ─── Minimal JWT (HS256) ────────────────────────────────────────────────────
@@ -29,6 +31,7 @@ type Claims struct {
 	Name      string `json:"name,omitempty"`
 	Picture   string `json:"picture,omitempty"`
 	TokenType string `json:"type,omitempty"` // "access" or "refresh"
+	JTI       string `json:"jti,omitempty"`  // JWT ID for granular revocation
 	IssuedAt  int64  `json:"iat"`
 	ExpiresAt int64  `json:"exp"`
 }
@@ -56,6 +59,7 @@ func (s *JWTService) GenerateToken(user *GoogleUserInfo) (string, error) {
 		Name:      user.Name,
 		Picture:   user.Picture,
 		TokenType: "access",
+		JTI:       uuid.NewString(),
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(TokenExpiry).Unix(),
 	}
@@ -69,6 +73,7 @@ func (s *JWTService) GenerateRefreshToken(user *GoogleUserInfo) (string, error) 
 	claims := Claims{
 		Email:     user.Email,
 		TokenType: "refresh",
+		JTI:       uuid.NewString(),
 		IssuedAt:  now.Unix(),
 		ExpiresAt: now.Add(RefreshTokenExpiry).Unix(),
 	}

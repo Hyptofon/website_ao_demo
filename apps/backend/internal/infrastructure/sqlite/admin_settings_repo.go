@@ -138,6 +138,26 @@ func (r *AdminSettingsRepo) IsRefreshTokenValid(ctx context.Context, email strin
 	return issuedAt > revokeUnix, nil
 }
 
+// RevokeJTI records a specific JWT ID as revoked.
+// This provides granular session revocation.
+func (r *AdminSettingsRepo) RevokeJTI(ctx context.Context, jti string, exp int64) error {
+	// We store the JTI as the key, and the expiration time as the value.
+	// A cleanup job could later remove expired JTIs to save space.
+	return r.Set(ctx, "revoked_jti_"+jti, fmt.Sprintf("%d", exp))
+}
+
+// IsJTIRevoked checks if a specific JWT ID is in the blacklist.
+func (r *AdminSettingsRepo) IsJTIRevoked(ctx context.Context, jti string) (bool, error) {
+	if jti == "" {
+		return false, nil // older tokens without JTI are not individually blacklisted
+	}
+	val, err := r.Get(ctx, "revoked_jti_"+jti)
+	if err != nil {
+		return false, err
+	}
+	return val != "", nil
+}
+
 // revokeKey returns the admin_settings key for the refresh revocation timestamp.
 func revokeKey(email string) string {
 	return "refresh_revoke:" + email

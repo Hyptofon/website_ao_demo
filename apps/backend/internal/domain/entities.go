@@ -208,10 +208,11 @@ type DocumentRecord struct {
 
 // AdminUser represents an authorized administrator.
 type AdminUser struct {
-	ID      int64     `json:"id"`
-	Email   string    `json:"email"`
-	AddedBy string    `json:"added_by"`
-	AddedAt time.Time `json:"added_at"`
+	ID           int64     `json:"id"`
+	Email        string    `json:"email"`
+	AddedBy      string    `json:"added_by"`
+	AddedAt      time.Time `json:"added_at"`
+	TokenVersion int       `json:"-"` // incremented on logout to invalidate refresh tokens
 }
 
 // ─── Phase 2: Extended Analytics ─────────────────────────────────────────────

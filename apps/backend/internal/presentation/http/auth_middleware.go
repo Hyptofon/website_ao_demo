@@ -207,18 +207,43 @@ func AuditMiddleware(auditRepo domain.AuditRepo) func(http.Handler) http.Handler
 
 
 // inferAction maps HTTP method + path to an admin action for auditing.
+// Returns "" for paths that should not be audited (auth, read-only endpoints
+// that are already covered by ActionViewAnalytics/ActionViewAuditLog).
+//
+// M-4 Fix: extended to cover rename, reindex, admin user management, prompts,
+// and CSV export — previously these were silently skipped.
 func inferAction(method, path string) string {
 	switch {
+	// ── Document mutations ──────────────────────────────────────────────────
 	case method == "POST" && strings.Contains(path, "/upload"):
 		return string(domain.ActionUploadDocument)
 	case method == "DELETE" && strings.Contains(path, "/documents/"):
 		return string(domain.ActionDeleteDocument)
+	case method == "PATCH" && strings.Contains(path, "/rename"):
+		return string(domain.ActionRenameDocument)
+	case method == "POST" && strings.Contains(path, "/reindex-all"):
+		return string(domain.ActionReindexAll)
+	case method == "POST" && strings.Contains(path, "/reindex"):
+		return string(domain.ActionReindexDocument)
+
+	// ── Admin user management ───────────────────────────────────────────────
+	case method == "POST" && strings.Contains(path, "/admins"):
+		return string(domain.ActionAddAdmin)
+	case method == "DELETE" && strings.Contains(path, "/admins/"):
+		return string(domain.ActionRemoveAdmin)
+
+	// ── Data export ─────────────────────────────────────────────────────────
+	case method == "GET" && strings.Contains(path, "/export"):
+		return string(domain.ActionExportCSV)
+
+	// ── Read-only admin views ────────────────────────────────────────────────
 	case method == "GET" && strings.Contains(path, "/analytics"):
 		return string(domain.ActionViewAnalytics)
 	case method == "GET" && strings.Contains(path, "/audit"):
 		return string(domain.ActionViewAuditLog)
+
 	default:
-		return ""
+		return "" // not audited (e.g. GET /documents list, GET /jobs/:id)
 	}
 }
 

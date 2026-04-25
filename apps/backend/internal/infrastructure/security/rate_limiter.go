@@ -1,41 +1,44 @@
 package security
 
 import (
+	"context"
 	"sync"
 	"time"
 )
 
 // window is a fixed-size ring-buffer of timestamps for one IP.
 type window struct {
-	mu        sync.Mutex
-	ts        []time.Time
-	banUntil  time.Time
+	mu       sync.Mutex
+	ts       []time.Time
+	banUntil time.Time
 }
 
 // RateLimiter implements an in-memory Sliding Window rate limiter.
 // No external DB required — uses sync.Map for thread-safe per-IP tracking.
 type RateLimiter struct {
-	mu          sync.Mutex
-	windows     sync.Map   // map[string]*window
-	limit       int        // max requests per period
+	windows     sync.Map      // map[string]*window
+	limit       int           // max requests per period
 	period      time.Duration
-	penaltyMult int        // spam/off-topic request penalty multiplier
+	penaltyMult int           // spam/off-topic request penalty multiplier
 	banDuration time.Duration
 }
 
 // NewRateLimiter creates a limiter with the given parameters.
+// ctx controls the lifecycle of the background cleanup goroutine —
+// cancel it (e.g. on SIGTERM) to stop the goroutine cleanly.
 // limit: max requests per period
 // period: sliding window size (e.g. 5 minutes)
 // penaltyMult: how many "normal" requests a spam/off-topic counts as
-func NewRateLimiter(limit int, period time.Duration, penaltyMult int) *RateLimiter {
+func NewRateLimiter(ctx context.Context, limit int, period time.Duration, penaltyMult int) *RateLimiter {
 	rl := &RateLimiter{
 		limit:       limit,
 		period:      period,
 		penaltyMult: penaltyMult,
 		banDuration: period,
 	}
-	// Background cleaner to prevent memory leak on idle goroutines.
-	go rl.cleanupLoop()
+	// Background cleaner to prevent memory leak from idle IP entries.
+	// Stopped automatically when ctx is cancelled (graceful shutdown).
+	go rl.cleanupLoop(ctx)
 	return rl
 }
 
@@ -96,26 +99,32 @@ func (rl *RateLimiter) Ban(ip string) {
 }
 
 // cleanupLoop removes stale IP entries every period to prevent memory leaks.
-func (rl *RateLimiter) cleanupLoop() {
+// Exits when ctx is cancelled, enabling graceful shutdown.
+func (rl *RateLimiter) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(rl.period)
 	defer ticker.Stop()
-	for range ticker.C {
-		cutoff := time.Now().Add(-rl.period)
-		rl.windows.Range(func(k, v any) bool {
-			w := v.(*window)
-			w.mu.Lock()
-			stale := len(w.ts) == 0 && time.Now().After(w.banUntil)
-			for _, t := range w.ts {
-				if t.After(cutoff) {
-					stale = false
-					break
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			cutoff := time.Now().Add(-rl.period)
+			rl.windows.Range(func(k, v any) bool {
+				w := v.(*window)
+				w.mu.Lock()
+				stale := len(w.ts) == 0 && time.Now().After(w.banUntil)
+				for _, t := range w.ts {
+					if t.After(cutoff) {
+						stale = false
+						break
+					}
 				}
-			}
-			w.mu.Unlock()
-			if stale {
-				rl.windows.Delete(k)
-			}
-			return true
-		})
+				w.mu.Unlock()
+				if stale {
+					rl.windows.Delete(k)
+				}
+				return true
+			})
+		}
 	}
 }

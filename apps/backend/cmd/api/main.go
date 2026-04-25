@@ -56,11 +56,15 @@ func main() {
 		log.Fatalf("Invalid configuration: %v", err)
 	}
 
-	ctx := context.Background()
+	// ── Shutdown context — cancelled on SIGTERM/SIGINT ───────────────────────
+	// Created first so all background goroutines (rate limiter, CSRF cleanup)
+	// share the same lifecycle and stop cleanly on signal.
+	serverCtx, serverStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer serverStop()
 
 	// ── Infrastructure: Gemini ─────────────────────────────────────────────────
 	slog.Info("Initialising Gemini client...")
-	geminiClient, err := gemini.NewClient(ctx, cfg.GeminiAPIKey)
+	geminiClient, err := gemini.NewClient(serverCtx, cfg.GeminiAPIKey)
 	if err != nil {
 		log.Fatalf("Gemini init: %v", err)
 	}
@@ -68,12 +72,12 @@ func main() {
 
 	// ── Infrastructure: Qdrant ─────────────────────────────────────────────────
 	slog.Info("Connecting to Qdrant...", "url", cfg.QdrantURL)
-	qdrantClient, err := qdrant.NewClient(ctx, cfg.QdrantURL, cfg.QdrantAPIKey, geminiClient)
+	qdrantClient, err := qdrant.NewClient(serverCtx, cfg.QdrantURL, cfg.QdrantAPIKey, geminiClient)
 	if err != nil {
 		log.Fatalf("Qdrant init: %v", err)
 	}
 
-	if err := qdrantClient.EnsureCollection(ctx); err != nil {
+	if err := qdrantClient.EnsureCollection(serverCtx); err != nil {
 		log.Fatalf("Qdrant ensure collection: %v", err)
 	}
 	slog.Info("Qdrant collection ready")
@@ -104,9 +108,11 @@ func main() {
 	adminUsersRepo := sqlite.NewAdminUsersRepo(db)
 
 	// ── Infrastructure: Security ───────────────────────────────────────────
-	rateLimiter := security.NewRateLimiter(cfg.RateLimitPerMin, 5*time.Minute, 3)
+	// Both limiters receive serverCtx so their cleanupLoop goroutines stop
+	// cleanly on SIGTERM/SIGINT (no goroutine leak after shutdown).
+	rateLimiter := security.NewRateLimiter(serverCtx, cfg.RateLimitPerMin, 5*time.Minute, 3)
 	// TZ §3.5: separate rate limiter for admin API — 100 requests per minute
-	adminRateLimiter := security.NewRateLimiter(100, time.Minute, 1)
+	adminRateLimiter := security.NewRateLimiter(serverCtx, 100, time.Minute, 1)
 	offTopicFilter := security.NewOffTopicFilter()
 
 	// ── Infrastructure: Cache and Memory (Phase 3) ─────────────────────────────
@@ -130,7 +136,7 @@ func main() {
 	if *indexDir != "" {
 		slog.Info("Indexing documents", "dir", *indexDir)
 		ih := chathttp.NewIndexHandler(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor)
-		if err := ih.IndexDocumentsFromDir(ctx, *indexDir); err != nil {
+		if err := ih.IndexDocumentsFromDir(serverCtx, *indexDir); err != nil {
 			log.Fatalf("Indexing failed: %v", err)
 		}
 		slog.Info("Indexing complete")
@@ -184,13 +190,9 @@ func main() {
 		AdminPathSegment: adminPathSegment,
 	})
 
-	// ── Start background cleanup goroutines with shutdown context ─────────────
-	// R-2: Use signal.NotifyContext so background goroutines (CSRF cleanup,
-	// rate limiter cleanup) receive a cancellation signal on SIGTERM/SIGINT
-	// and stop cleanly instead of leaking after srv.Shutdown() completes.
-	serverCtx, serverStop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer serverStop()
-
+	// ── Start background cleanup goroutines ───────────────────────────────────
+	// serverCtx was created at the top of main() and is cancelled on
+	// SIGTERM/SIGINT — this stops CSRF cleanup and RateLimiter goroutines.
 	chathttp.StartCSRFCleanup(serverCtx)
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
@@ -203,9 +205,9 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
-	// ── Graceful Shutdown (Pattern #1) ───────────────────────────────────────
-	quit := make(chan os.Signal, 1)
-	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+	// ── Graceful Shutdown ─────────────────────────────────────────────────────
+	// serverCtx is already registered for SIGINT/SIGTERM via signal.NotifyContext.
+	// We just need to wait for its cancellation.
 
 	go func() {
 		slog.Info("Server listening", "addr", "http://0.0.0.0"+addr)
@@ -215,9 +217,9 @@ func main() {
 	}()
 
 	// Block until shutdown signal
-	sig := <-quit
-	slog.Info("Received shutdown signal, starting graceful shutdown...", "signal", sig.String())
-	serverStop() // cancel context — stops all context-aware background goroutines
+	<-serverCtx.Done()
+	slog.Info("Received shutdown signal, starting graceful shutdown...")
+	serverStop() // release signal.NotifyContext resources
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -316,6 +318,9 @@ func (c *config) Validate() error {
 	}
 	if c.JWTSecret == "change-me-in-production-please-32chars" {
 		slog.Warn("JWT_SECRET is using default value — please set a secure secret in production!")
+	}
+	if len(c.JWTSecret) < 32 {
+		return fmt.Errorf("JWT_SECRET must be at least 32 bytes long (got %d); generate one with: openssl rand -hex 32", len(c.JWTSecret))
 	}
 	return nil
 }

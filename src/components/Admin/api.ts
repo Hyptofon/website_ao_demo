@@ -96,22 +96,28 @@ export interface PromptVariant {
   avg_score: number;
 }
 
-// ─── Auth ───────────────────────────────────────────────────────────────────
+// ─── Auth — In-Memory Token Store ───────────────────────────────────────────
 //
-// M-9 Security: Access token is stored in sessionStorage, NOT localStorage.
-// sessionStorage:
-//   - Is cleared when the tab/browser is closed (no persistent XSS risk)
-//   - Is NOT shared between tabs (each admin session is isolated)
-//   - Is still vulnerable to XSS within the same page, but far less persistent
+// Security upgrade: JWT access token is stored in a module-level variable,
+// NOT in sessionStorage or localStorage.
+//
+// Why in-memory is better than sessionStorage:
+//   - sessionStorage is still accessible via JS (DevTools, XSS within page)
+//   - Module-level variable is only accessible to code in this module
+//   - Not serialized to any storage API — survives only for the current page load
+//
+// Trade-off: token is lost on page refresh.
+// Mitigation: refreshAccessToken() is called automatically on first load
+// (see AdminPanel.tsx useEffect) using the HttpOnly refresh token cookie.
+// The user never sees a login screen unless the refresh token also expires.
 //
 // The long-lived refresh token remains in an HttpOnly cookie (server-managed).
-// If the tab is closed, the user must re-authenticate via the refresh flow.
 
-const TOKEN_KEY = "admin_jwt";
-export const getToken = () =>
-  typeof window !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) : null;
-export const setToken = (t: string) => sessionStorage.setItem(TOKEN_KEY, t);
-export const clearToken = () => sessionStorage.removeItem(TOKEN_KEY);
+let _memoryToken: string | null = null;
+
+export const getToken = (): string | null => _memoryToken;
+export const setToken = (t: string): void => { _memoryToken = t; };
+export const clearToken = (): void => { _memoryToken = null; };
 
 // ─── Fetch ──────────────────────────────────────────────────────────────────
 

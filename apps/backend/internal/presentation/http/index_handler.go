@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"log/slog"
 	"net/http"
 	"os"
@@ -64,7 +63,7 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 
 		ext := strings.ToLower(filepath.Ext(entry.Name()))
 		if !parser.IsSupported(entry.Name()) {
-			log.Printf("  [skip] %s — unsupported format %q", entry.Name(), ext)
+			slog.Debug("Indexing: skipping unsupported format", "file", entry.Name(), "ext", ext)
 			skipped++
 			continue
 		}
@@ -75,20 +74,20 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 		var extractErr error
 
 		if ext == ".pdf" {
-			log.Printf("  [pdf]  %s — extracting via Gemini...", entry.Name())
+			slog.Info("Indexing: extracting PDF via Gemini", "file", entry.Name())
 			text, extractErr = h.pdfExtractor.ExtractText(ctx, path)
 		} else {
 			text, extractErr = parser.ExtractText(path)
 		}
 
 		if extractErr != nil {
-			log.Printf("  [FAIL] %s — %v", entry.Name(), extractErr)
+			slog.Error("Indexing: extraction failed", "file", entry.Name(), "error", extractErr)
 			failed++
 			continue
 		}
 
 		if strings.TrimSpace(text) == "" {
-			log.Printf("  [skip] %s — empty content after extraction", entry.Name())
+			slog.Warn("Indexing: empty content after extraction", "file", entry.Name())
 			skipped++
 			continue
 		}
@@ -105,22 +104,22 @@ func (h *IndexHandler) IndexDocumentsFromDir(ctx context.Context, dir string) er
 
 		chunks := h.chunker.Chunk(docID, entry.Name(), "document", lang, text)
 		if len(chunks) == 0 {
-			log.Printf("  [skip] %s — no chunks extracted", entry.Name())
+			slog.Warn("Indexing: no chunks extracted", "file", entry.Name())
 			skipped++
 			continue
 		}
 
 		if err := h.vectorStore.UpsertChunks(ctx, chunks); err != nil {
-			log.Printf("  [FAIL] %s — upsert error: %v", entry.Name(), err)
+			slog.Error("Indexing: upsert failed", "file", entry.Name(), "error", err)
 			failed++
 			continue
 		}
 
-		log.Printf("  [ok]   %s → %d chunks (%d chars extracted)", entry.Name(), len(chunks), len(text))
+		slog.Info("Indexing: file indexed", "file", entry.Name(), "chunks", len(chunks), "chars", len(text))
 		indexed++
 	}
 
-	log.Printf("Indexing summary: %d indexed, %d skipped, %d failed", indexed, skipped, failed)
+	slog.Info("Indexing complete", "indexed", indexed, "skipped", skipped, "failed", failed)
 	return nil
 }
 
@@ -275,11 +274,12 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath
 	if h.metaExtractor != nil {
 		meta, metaErr := h.metaExtractor.ExtractMetadata(ctx, text)
 		if metaErr != nil {
-			log.Printf("[WARN] Metadata extraction failed for %s, using defaults: %v", originalFilename, metaErr)
+			slog.Warn("Metadata extraction failed, using defaults",
+				"filename", originalFilename, "error", metaErr)
 		} else {
 			lang = meta.Language
 			docType = meta.DocType
-			log.Printf("[INFO] Detected metadata for %s: lang=%s, type=%s", originalFilename, lang, docType)
+			slog.Info("Metadata detected", "filename", originalFilename, "lang", lang, "type", docType)
 		}
 	}
 

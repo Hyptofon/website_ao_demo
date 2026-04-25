@@ -188,6 +188,7 @@ func main() {
 		DB:               db,
 		AdminSettings:    settingsRepo,
 		AdminPathSegment: adminPathSegment,
+		MetricsToken:     cfg.MetricsToken,
 	})
 
 	// ── Start background cleanup goroutines ───────────────────────────────────
@@ -258,6 +259,8 @@ type config struct {
 	EnableReranking    bool
 	FrontendURL        string
 	CookieSameSiteNone bool
+	// MetricsToken: if set, /metrics accepts Bearer auth from any IP (external Prometheus).
+	MetricsToken       string
 }
 
 func loadConfig() config {
@@ -299,6 +302,7 @@ func loadConfig() config {
 		EnableReranking:    os.Getenv("ENABLE_RERANKING") == "true",
 		FrontendURL:        getEnvOr("FRONTEND_URL", "http://localhost:4321/admin"),
 		CookieSameSiteNone: os.Getenv("COOKIE_SAME_SITE_NONE") == "true",
+		MetricsToken:       os.Getenv("METRICS_TOKEN"),
 	}
 }
 

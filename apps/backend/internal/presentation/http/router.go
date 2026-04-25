@@ -40,6 +40,10 @@ type RouterDeps struct {
 	// Used to mount the admin routes at /admin-{segment}/* instead of /admin/*,
 	// making the URL unpredictable to external parties (TZ §3.3, §4.2).
 	AdminPathSegment string
+	// MetricsToken: if non-empty, /metrics is accessible from any IP using
+	// Bearer authentication (for external Prometheus scrapers on Railway, etc.).
+	// If empty, /metrics is restricted to 127.0.0.1 / ::1 only.
+	MetricsToken string
 }
 
 // NewRouter constructs the chi router with all routes and middleware.
@@ -130,15 +134,28 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	})
 
 	// ── Prometheus Metrics (TZ §8.2) ──────────────────────────────────────────
-	// Restrict to loopback interface only — metrics must not be publicly accessible.
+	// Two access modes:
+	//   1. Default (MetricsToken == ""): localhost-only (loopback addresses).
+	//   2. MetricsToken set via env METRICS_TOKEN: any IP with Bearer auth.
+	//      Enables external Prometheus scrapers (Railway, Grafana Cloud, etc.).
 	r.Handle("/metrics", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		remoteIP := r.RemoteAddr
-		if idx := strings.LastIndex(remoteIP, ":"); idx > 0 {
-			remoteIP = remoteIP[:idx]
-		}
-		if remoteIP != "127.0.0.1" && remoteIP != "::1" && remoteIP != "[::1]" {
-			http.Error(w, "forbidden", http.StatusForbidden)
-			return
+		if deps.MetricsToken != "" {
+			// Token-based mode: accept any IP with correct Bearer token.
+			authHeader := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if authHeader != deps.MetricsToken {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
+		} else {
+			// Localhost-only mode (default): restrict to loopback interfaces.
+			remoteIP := r.RemoteAddr
+			if idx := strings.LastIndex(remoteIP, ":"); idx > 0 {
+				remoteIP = remoteIP[:idx]
+			}
+			if remoteIP != "127.0.0.1" && remoteIP != "::1" && remoteIP != "[::1]" {
+				http.Error(w, "forbidden", http.StatusForbidden)
+				return
+			}
 		}
 		promhttp.Handler().ServeHTTP(w, r)
 	}))

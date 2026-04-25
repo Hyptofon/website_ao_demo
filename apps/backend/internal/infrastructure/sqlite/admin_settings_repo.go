@@ -158,6 +158,21 @@ func (r *AdminSettingsRepo) IsJTIRevoked(ctx context.Context, jti string) (bool,
 	return val != "", nil
 }
 
+// CleanupExpiredJTIs removes JWT IDs from the blacklist that have passed their expiration time.
+func (r *AdminSettingsRepo) CleanupExpiredJTIs(ctx context.Context) error {
+	now := time.Now().Unix()
+	
+	// Use a direct query because our generic Set/Get doesn't easily support range deletes
+	// Note: We need to filter by key prefix "revoked_jti_" and CAST the value to integer.
+	query := `
+		DELETE FROM admin_settings 
+		WHERE key LIKE 'revoked_jti_%' 
+		AND CAST(value AS INTEGER) < ?
+	`
+	_, err := r.db.ExecContext(ctx, query, now)
+	return err
+}
+
 // revokeKey returns the admin_settings key for the refresh revocation timestamp.
 func revokeKey(email string) string {
 	return "refresh_revoke:" + email

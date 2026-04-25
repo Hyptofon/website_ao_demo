@@ -26,6 +26,7 @@ func (m *mockVectorStore) EnsureCollection(_ context.Context) error { return nil
 func (m *mockVectorStore) UpsertChunks(_ context.Context, _ []domain.Chunk) error { return nil }
 func (m *mockVectorStore) DeleteByDocumentID(_ context.Context, _ string) error { return nil }
 func (m *mockVectorStore) RenameDocumentPayload(_ context.Context, _, _ string) error { return nil }
+func (m *mockVectorStore) Ping(_ context.Context) error { return nil }
 func (m *mockVectorStore) HybridSearch(_ context.Context, _ string, _ int) ([]domain.SearchResult, error) {
 	return m.results, m.err
 }

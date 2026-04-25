@@ -15,7 +15,15 @@ func RateLimitMiddleware(rl *security.RateLimiter) func(http.Handler) http.Handl
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			ip := realIP(r)
-			allowed, retryAfter := rl.Allow(ip, 1) // Base weight is 1
+			
+			// Hybrid Rate Limiting: combine IP and Email (if authenticated)
+			// This prevents NAT/shared IP false positives for logged-in admins.
+			limitKey := ip
+			if email := AdminEmailFromCtx(r.Context()); email != "" {
+				limitKey = fmt.Sprintf("%s:%s", ip, email)
+			}
+
+			allowed, retryAfter := rl.Allow(limitKey, 1) // Base weight is 1
 			if !allowed {
 				secs := int(retryAfter.Seconds())
 				// TZ §6.1: Set standard HTTP Retry-After header

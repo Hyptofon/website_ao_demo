@@ -71,6 +71,12 @@ func (c *Client) EnsureCollection(ctx context.Context) error {
 	return nil
 }
 
+// Ping checks if the Qdrant service is reachable.
+func (c *Client) Ping(ctx context.Context) error {
+	_, err := c.conn.HealthCheck(ctx)
+	return err
+}
+
 // UpsertChunks embeds and stores document chunks into Qdrant.
 func (c *Client) UpsertChunks(ctx context.Context, chunks []domain.Chunk) error {
 	points := make([]*qdrant.PointStruct, 0, len(chunks))

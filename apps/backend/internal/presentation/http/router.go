@@ -172,22 +172,27 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	// Mounted under the hidden admin path so the OAuth callback URL is also unpredictable.
 	adminPrefix := "/admin-" + deps.AdminPathSegment
 	if deps.AdminHandler != nil {
-		r.Get(adminPrefix+"/auth/login", deps.AdminHandler.HandleLogin)
-		r.Get(adminPrefix+"/auth/callback", deps.AdminHandler.HandleCallback)
-		r.Post(adminPrefix+"/auth/refresh", deps.AdminHandler.HandleRefreshToken)
+		authRouter := r.With()
+		if deps.AdminRateLimiter != nil {
+			authRouter = r.With(RateLimitMiddleware(deps.AdminRateLimiter))
+		}
+		authRouter.Get(adminPrefix+"/auth/login", deps.AdminHandler.HandleLogin)
+		authRouter.Get(adminPrefix+"/auth/callback", deps.AdminHandler.HandleCallback)
+		authRouter.Post(adminPrefix+"/auth/refresh", deps.AdminHandler.HandleRefreshToken)
 	}
 
 	// ── Admin API (protected) ─────────────────────────────────────────────
 	// All admin routes are mounted at /admin-{randomHex32} to make the
 	// admin surface unpredictable. The path segment is derived from ADMIN_TOKEN.
 	r.Route(adminPrefix, func(r chi.Router) {
+		// Dual auth: JWT OR Admin-Token
+		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails, deps.AdminSettings))
+
 		// TZ §3.5: separate rate limit for admin API (100 req/min)
+		// Placed after Auth so we can rate limit by IP + Email hybrid.
 		if deps.AdminRateLimiter != nil {
 			r.Use(RateLimitMiddleware(deps.AdminRateLimiter))
 		}
-
-		// Dual auth: JWT OR Admin-Token
-		r.Use(DualAuthMiddleware(deps.JWTService, deps.AdminToken, deps.AllowedEmails, deps.AdminSettings))
 
 		// Audit logging for all admin actions
 		if deps.AuditRepo != nil {

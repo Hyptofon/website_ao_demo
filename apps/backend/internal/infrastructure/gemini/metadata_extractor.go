@@ -3,7 +3,7 @@ package gemini
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"strings"
 
 	"google.golang.org/genai"
@@ -78,7 +78,7 @@ func (m *MetadataExtractor) ExtractMetadata(ctx context.Context, text string) (*
 	// Parse with sanitization
 	var meta DocumentMetadata
 	if err := utils.SafeJSONUnmarshal([]byte(rawJSON.String()), &meta); err != nil {
-		log.Printf("[WARN] Metadata extraction JSON parse failed, using defaults: %v", err)
+		slog.Warn("Metadata extraction JSON parse failed, using defaults", "error", err)
 		return defaultMetadata(text), nil
 	}
 

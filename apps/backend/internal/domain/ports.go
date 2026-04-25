@@ -24,6 +24,9 @@ type VectorStore interface {
 	// DeleteByDocumentID removes all chunks belonging to a document.
 	DeleteByDocumentID(ctx context.Context, documentID string) error
 
+	// Ping checks if the vector database is reachable.
+	Ping(ctx context.Context) error
+
 	// RenameDocumentPayload updates the 'document_name' payload for all points belonging to a document.
 	RenameDocumentPayload(ctx context.Context, documentID string, newName string) error
 }

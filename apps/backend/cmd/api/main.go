@@ -206,7 +206,7 @@ func main() {
 			},
 			"qdrant": func(ctx context.Context) error {
 				if qdrantClient != nil {
-					return qdrantClient.EnsureCollection(ctx)
+					return qdrantClient.Ping(ctx)
 				}
 				return nil
 			},
@@ -217,6 +217,24 @@ func main() {
 	// serverCtx was created at the top of main() and is cancelled on
 	// SIGTERM/SIGINT — this stops CSRF cleanup and RateLimiter goroutines.
 	chathttp.StartCSRFCleanup(serverCtx)
+
+	// Clean up expired JTI tokens every 12 hours
+	go func() {
+		ticker := time.NewTicker(12 * time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-serverCtx.Done():
+				return
+			case <-ticker.C:
+				if err := settingsRepo.CleanupExpiredJTIs(context.Background()); err != nil {
+					slog.Error("Failed to cleanup expired JTIs", "error", err)
+				} else {
+					slog.Debug("Cleaned up expired JTIs from database")
+				}
+			}
+		}
+	}()
 
 	// ── HTTP Server ────────────────────────────────────────────────────────────
 	addr := fmt.Sprintf(":%d", cfg.Port)

@@ -1,10 +1,13 @@
-// AdminPanel — root orchestrator.
-// Uses client:only="react" in Astro for full client-side rendering.
-
 import { useState, useEffect } from "react";
 import { Toaster, toast } from "sonner";
 import { AnimatePresence, motion } from "motion/react";
-import { getToken, clearToken, logout as apiLogout } from "./api";
+import {
+  getToken,
+  setToken,
+  clearToken,
+  refreshAccessToken,
+  logout as apiLogout,
+} from "./api";
 import { LoginScreen } from "./LoginScreen";
 import { Sidebar, type Tab } from "./Sidebar";
 import { OverviewTab } from "./OverviewTab";
@@ -21,32 +24,38 @@ export default function AdminPanel() {
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    // Extract JWT from OAuth redirect.
-    //
-    // Primary path: the backend now sends the token in the URL fragment
-    // (#token=...) to prevent it from appearing in server logs or Referer headers.
-    // The fragment is NEVER sent to any server by the browser.
-    //
-    // Fallback: also check ?token= for backward compatibility with older redirects.
-    let urlToken: string | null = null;
+    async function initAuth() {
+      // Step 1: Check URL fragment/query for token (post-OAuth redirect).
+      // The backend sends token in #token=... fragment (never logged server-side).
+      let urlToken: string | null = null;
 
-    if (window.location.hash) {
-      const hashParams = new URLSearchParams(window.location.hash.slice(1));
-      urlToken = hashParams.get("token");
+      if (window.location.hash) {
+        const hashParams = new URLSearchParams(window.location.hash.slice(1));
+        urlToken = hashParams.get("token");
+      }
+      if (!urlToken) {
+        const params = new URLSearchParams(window.location.search);
+        urlToken = params.get("token");
+      }
+
+      if (urlToken) {
+        // Store in module-level variable only (NOT localStorage or sessionStorage).
+        setToken(urlToken);
+        window.history.replaceState({}, "", window.location.pathname);
+      }
+
+      // Step 2: If no token in URL, try silent refresh via HttpOnly cookie.
+      // This handles the "page refresh" case: _memoryToken is null but the
+      // refresh cookie is still valid — user gets logged in transparently.
+      if (!getToken()) {
+        await refreshAccessToken();
+      }
+
+      setAuthed(!!getToken());
+      setReady(true);
     }
 
-    if (!urlToken) {
-      const params = new URLSearchParams(window.location.search);
-      urlToken = params.get("token");
-    }
-
-    if (urlToken) {
-      localStorage.setItem("admin_jwt", urlToken);
-      window.history.replaceState({}, "", window.location.pathname);
-    }
-
-    setAuthed(!!getToken());
-    setReady(true);
+    initAuth();
   }, []);
 
   const handleLogout = async () => {

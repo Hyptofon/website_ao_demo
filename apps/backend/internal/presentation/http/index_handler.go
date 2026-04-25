@@ -302,16 +302,30 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath
 	_ = h.jobsRepo.UpdateProgress(context.Background(), jobID, 100, "Indexing completed")
 	_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusCompleted, nil)
 
-	// Phase 2: Track document in SQLite for admin panel
+	// Phase 2: Track document in SQLite for admin panel.
+	// C-3 Fix: if SQLite insert fails after chunks are already in Qdrant, we have
+	// orphaned vector data that can never be cleaned up via the admin UI.
+	// Compensating rollback: delete the chunks from Qdrant to restore consistency.
 	if h.documentRepo != nil {
-		_ = h.documentRepo.Create(context.Background(), &domain.DocumentRecord{
+		if err := h.documentRepo.Create(context.Background(), &domain.DocumentRecord{
 			ID:         jobID,
 			Filename:   originalFilename,
 			DocType:    docType,
 			Language:   domain.Language(lang),
 			ChunkCount: len(chunks),
 			UploadedBy: adminEmail,
-		})
+		}); err != nil {
+			slog.Error("Failed to create document record — rolling back Qdrant chunks",
+				"job_id", jobID, "filename", originalFilename, "error", err)
+			// Best-effort compensating rollback: remove chunks from Qdrant.
+			if rollbackErr := h.vectorStore.DeleteByDocumentID(context.Background(), jobID); rollbackErr != nil {
+				slog.Error("Qdrant rollback failed — orphaned chunks remain",
+					"job_id", jobID, "rollback_error", rollbackErr)
+			}
+			_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusFailed,
+				fmt.Errorf("failed to save document record: %w", err))
+			return
+		}
 	}
 }
 
@@ -504,10 +518,26 @@ func (h *IndexHandler) HandleReindexAll(w http.ResponseWriter, r *http.Request) 
 	go func() {
 		slog.Info("ReindexAll: starting", "total_docs", len(queue), "admin", adminEmail)
 		for _, entry := range queue {
+			// C-4 Fix: Create a job record BEFORE calling processBackgroundUpload.
+			// Without this, UpdateJobStatus inside processBackgroundUpload silently
+			// fails with ErrJobNotFound — the admin UI cannot track reindex progress.
+			// We use INSERT OR REPLACE so re-running reindex replaces the old record.
+			jobRecord := &domain.UploadJob{
+				ID:          entry.id,
+				Filename:    entry.filename,
+				Status:      domain.JobStatusPending,
+				CurrentStep: "Queued for reindex",
+			}
+			if createErr := h.jobsRepo.UpsertJob(context.Background(), jobRecord); createErr != nil {
+				slog.Warn("ReindexAll: could not upsert job record, continuing",
+					"doc_id", entry.id, "error", createErr)
+			}
+
 			// Delete old chunks before re-indexing.
 			if err := h.vectorStore.DeleteByDocumentID(context.Background(), entry.id); err != nil {
 				slog.Error("ReindexAll: failed to delete old chunks", "doc_id", entry.id, "error", err)
-				// Continue with next document — partial reindex is better than none.
+				_ = h.jobsRepo.UpdateJobStatus(context.Background(), entry.id, domain.JobStatusFailed,
+					fmt.Errorf("failed to delete old chunks: %w", err))
 				continue
 			}
 			h.processBackgroundUpload(entry.id, entry.filename, entry.filePath, adminEmail)

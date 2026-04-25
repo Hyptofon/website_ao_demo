@@ -38,6 +38,24 @@ func (r *JobRepository) CreateJob(ctx context.Context, job *domain.UploadJob) er
 	return nil
 }
 
+// UpsertJob inserts or replaces a job record (idempotent).
+// Used by ReindexAll so that re-running reindex resets the job state
+// even if a job with the same ID already exists from a previous upload.
+func (r *JobRepository) UpsertJob(ctx context.Context, job *domain.UploadJob) error {
+	query := `INSERT OR REPLACE INTO upload_jobs (id, filename, status, error, progress, current_step, chunks_count, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+	now := time.Now().UTC()
+	job.CreatedAt = now
+	job.UpdatedAt = now
+
+	_, err := r.db.ExecContext(ctx, query, job.ID, job.Filename, job.Status, job.Error,
+		job.Progress, job.CurrentStep, job.ChunksCount, job.CreatedAt, job.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("upsert job: %w", err)
+	}
+	return nil
+}
+
 // UpdateJobStatus modifies the status and error of an existing job.
 func (r *JobRepository) UpdateJobStatus(ctx context.Context, id string, status domain.JobStatus, jobErr error) error {
 	var errStr *string

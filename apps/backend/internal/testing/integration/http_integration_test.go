@@ -13,6 +13,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -26,15 +27,33 @@ import (
 	"university-chatbot/backend/internal/infrastructure/auth"
 	"university-chatbot/backend/internal/infrastructure/security"
 	chathttp "university-chatbot/backend/internal/presentation/http"
+	"university-chatbot/backend/internal/application/features/chat/queries"
 )
 
 // ─── Mocks ───────────────────────────────────────────────────────────────────
 
-// mockAskBot satisfies AskBotUseCase. Always returns a minimal SSE token.
+// mockAskBot satisfies AskBotUseCase. Simulates SSE streaming.
 type mockAskBot struct{ fail bool }
 
-func (m *mockAskBot) Handle(ctx context.Context, q interface{ GetRequest() *domain.ChatRequest }, w io.Writer) (*struct{ QueryHash string; Sources []domain.Source }, error) {
-	return nil, nil
+func (m *mockAskBot) Handle(ctx context.Context, q queries.AskBotQuery, w io.Writer) (*queries.AskBotResult, error) {
+	if m.fail {
+		return nil, fmt.Errorf("invalid input")
+	}
+	
+	// Simulate SSE chunks
+	chunks := []string{"Hello", " ", "world", "!"}
+	for _, chunk := range chunks {
+		fmt.Fprintf(w, "data: %s\n\n", chunk)
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	return &queries.AskBotResult{
+		QueryHash: "mock-hash",
+		Sources:   []domain.Source{},
+	}, nil
 }
 
 // mockAnalyticsRepo satisfies domain.AnalyticsRepo for write-only tests.
@@ -81,11 +100,11 @@ func buildTestRouter(t *testing.T) http.Handler {
 		_, _ = w.Write([]byte(`{"status":"ok"}`))
 	})
 
+	// Real ChatHandler with mocked UseCase and Repo
+	chatHandler := chathttp.NewChatHandler(&mockAskBot{}, nil, nil, nil, &mockAnalyticsRepo{})
+
 	// Rate limit middleware applied to /chat path
-	r.With(chathttp.RateLimitMiddleware(rl)).Post("/api/v1/chat/stream", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
-	})
+	r.With(chathttp.RateLimitMiddleware(rl)).Post("/api/v1/chat/stream", chatHandler.StreamChat)
 
 	// JWT auth protected endpoint
 	r.With(chathttp.DualAuthMiddleware(jwtSvc, "test-legacy-token", []string{"test@example.com"}, nil)).Get("/admin-test/protected", func(w http.ResponseWriter, r *http.Request) {
@@ -247,4 +266,47 @@ func TestRateLimitMiddlewareBansExcessiveTraffic(t *testing.T) {
 		}
 	}
 	t.Errorf("expected 429 after excessive requests, last status: %d", lastStatus)
+}
+
+// TestChatSSEStreaming verifies that the chat endpoint correctly formats
+// SSE (Server-Sent Events) and streams them to the client.
+func TestChatSSEStreaming(t *testing.T) {
+	router := buildTestRouter(t)
+	srv := httptest.NewServer(router)
+	defer srv.Close()
+
+	reqBody := `{"message":"test stream","language":"uk","session_id":"test-123"}`
+	resp, err := http.Post(srv.URL+"/api/v1/chat/stream", "application/json", strings.NewReader(reqBody))
+	if err != nil {
+		t.Fatalf("POST /chat/stream: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/event-stream") {
+		t.Errorf("expected text/event-stream, got %q", ct)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	bodyStr := string(body)
+
+	// mockAskBot sends "data: Hello\n\ndata:  \n\ndata: world\n\ndata: !\n\n"
+	if !strings.Contains(bodyStr, "data: Hello\n\n") {
+		t.Errorf("missing SSE chunk Hello, got:\n%s", bodyStr)
+	}
+	if !strings.Contains(bodyStr, "data: world\n\n") {
+		t.Errorf("missing SSE chunk world, got:\n%s", bodyStr)
+	}
+	
+	// Check for final meta JSON payload
+	if !strings.Contains(bodyStr, "event: meta") {
+		t.Errorf("missing meta event")
+	}
+	if !strings.Contains(bodyStr, "data: [DONE]") {
+		t.Errorf("missing [DONE] message")
+	}
 }

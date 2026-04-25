@@ -23,16 +23,26 @@ type sessionData struct {
 
 // NewChatMemory creates a new in-memory conversation store and starts a background
 // goroutine to clean up expired sessions.
-func NewChatMemory(ttl time.Duration) *ChatMemory {
+// The ctx parameter controls the lifecycle of the cleanup goroutine:
+// when ctx is cancelled (e.g. on SIGTERM) the goroutine exits cleanly.
+func NewChatMemory(ctx context.Context, ttl time.Duration) *ChatMemory {
 	cm := &ChatMemory{
 		ttl: ttl,
 	}
 
-	// Start background cleanup
+	// Start context-aware background cleanup.
+	// Previously used time.Sleep which cannot be interrupted on shutdown.
+	// Now uses ticker + select so the goroutine exits when serverCtx is cancelled.
 	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
 		for {
-			time.Sleep(10 * time.Minute)
-			cm.cleanup()
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cm.cleanup()
+			}
 		}
 	}()
 

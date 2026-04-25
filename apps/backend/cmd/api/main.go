@@ -123,7 +123,7 @@ func main() {
 
 	// ── Infrastructure: Cache and Memory (Phase 3) ─────────────────────────────
 	cacheStore := cache.NewCacheFromEnv(cfg.UpstashRedisURL, cfg.UpstashRedisToken)
-	chatMem := memory.NewChatMemory(24 * time.Hour)
+	chatMem := memory.NewChatMemory(serverCtx, 24*time.Hour)
 
 	// ── Infrastructure: Auth (Phase 2 — Google OAuth + JWT) ────────────────────
 	oauthSvc := auth.NewOAuthService(auth.OAuthConfig{
@@ -163,7 +163,7 @@ func main() {
 
 	// ── Presentation: Handlers ────────────────────────────────────────────────
 	chatHttp := chathttp.NewChatHandler(askBotHandler, feedbackHandler, rateLimiter.Ban, offTopicFilter, analyticsRepo)
-	indexHandler := chathttp.NewIndexHandlerFull(qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
+	indexHandler := chathttp.NewIndexHandlerFull(serverCtx, qdrantClient, chunkr, pdfExtractor, jobsRepo, metaExtractor, documentRepo, auditRepo)
 
 	// Derive admin path segment before building adminHandler so the
 	// refresh cookie path can be computed at construction time (W-5).

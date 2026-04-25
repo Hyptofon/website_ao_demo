@@ -24,13 +24,14 @@ import (
 
 // IndexHandler handles document indexing for the admin CLI / seeding.
 type IndexHandler struct {
+	serverCtx     context.Context   // lifecycle context for background goroutines
 	vectorStore   domain.VectorStore
 	chunker       *chunker.Chunker
 	pdfExtractor  *parser.PDFExtractor
 	jobsRepo      *sqlite.JobRepository
 	metaExtractor *gemini.MetadataExtractor
-	documentRepo  domain.DocumentRepo 
-	auditRepo     domain.AuditRepo   
+	documentRepo  domain.DocumentRepo
+	auditRepo     domain.AuditRepo
 	workerSem     chan struct{}
 }
 
@@ -234,10 +235,11 @@ func (h *IndexHandler) processBackgroundUpload(jobID, originalFilename, filePath
 	h.workerSem <- struct{}{}
 	defer func() { <-h.workerSem }()
 
-	// C-5: Use a bounded context so the goroutine cannot hang forever.
-	// PDF extraction via Gemini API can block indefinitely on network issues.
+	// C-5 / Graceful Shutdown Fix: derive the upload context from h.serverCtx
+	// so that on SIGTERM, any active upload is cancelled (not orphaned for 10min).
+	// The 10-minute timeout still applies as a safety net for stuck goroutines.
 	const uploadTimeout = 10 * time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), uploadTimeout)
+	ctx, cancel := context.WithTimeout(h.serverCtx, uploadTimeout)
 	defer cancel()
 
 	_ = h.jobsRepo.UpdateJobStatus(context.Background(), jobID, domain.JobStatusProcessing, nil)

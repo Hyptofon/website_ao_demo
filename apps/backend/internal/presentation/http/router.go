@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -253,8 +254,11 @@ func NewRouter(deps RouterDeps) *chi.Mux {
 	return r
 }
 
-// NewIndexHandler constructs the handler (moved from old router.go inline creation).
+// NewIndexHandlerFull constructs the handler with full dependencies.
+// ctx is the server lifecycle context — background goroutines (uploads, reindex)
+// inherit it so they are cancelled on SIGTERM/SIGINT.
 func NewIndexHandlerFull(
+	ctx context.Context,
 	vs domain.VectorStore,
 	c *chunker.Chunker,
 	pe *parser.PDFExtractor,
@@ -264,12 +268,14 @@ func NewIndexHandlerFull(
 	auditRepo domain.AuditRepo,
 ) *IndexHandler {
 	return &IndexHandler{
-		vectorStore:   vs,
-		chunker:       c,
-		pdfExtractor:  pe,
-		jobsRepo:      jobsRepo,
+		serverCtx:    ctx,
+		vectorStore:  vs,
+		chunker:      c,
+		pdfExtractor: pe,
+		jobsRepo:     jobsRepo,
 		metaExtractor: me,
-		documentRepo:  docRepo,
-		auditRepo:     auditRepo,
+		documentRepo: docRepo,
+		auditRepo:    auditRepo,
+		workerSem:    make(chan struct{}, 3),
 	}
 }

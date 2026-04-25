@@ -94,11 +94,17 @@ func main() {
 	defer db.Close()
 	slog.Info("SQLite ready", "path", cfg.DBPath)
 
-	// ── Infrastructure: Repositories ─────────────────────────────────────────
-	analyticsRepo, err := sqlite.NewAnalyticsRepo(db)
+	// M-3 Fix: wrap the raw analytics repo with a batch writer.
+	// rawAnalyticsRepo handles direct DB reads (Summary, TopQueries, etc.).
+	// analyticsRepo (batch writer) handles all Record() calls non-blocking via
+	// a buffered channel, flushing in batch INSERTs every 500ms.
+	// The batch writer stops cleanly when serverCtx is cancelled.
+	rawAnalyticsRepo, err := sqlite.NewAnalyticsRepo(db)
 	if err != nil {
 		log.Fatalf("SQLite analytics repo init: %v", err)
 	}
+	analyticsRepo := sqlite.NewBatchAnalyticsWriter(serverCtx, rawAnalyticsRepo, db)
+
 	jobsRepo := sqlite.NewJobRepository(db)
 	auditRepo := sqlite.NewAuditRepo(db)
 	documentRepo := sqlite.NewDocumentRepo(db)

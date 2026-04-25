@@ -57,10 +57,10 @@ func (r *AnalyticsRepo) Summary(ctx context.Context, days int) (*domain.Analytic
 
 	row := r.db.QueryRowContext(ctx, `
 		SELECT
-			COUNT(*),
-			SUM(CASE WHEN is_blocked = 1 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN feedback =  1 THEN 1 ELSE 0 END),
-			SUM(CASE WHEN feedback = -1 THEN 1 ELSE 0 END),
+			COALESCE(COUNT(*), 0),
+			COALESCE(SUM(CASE WHEN is_blocked = 1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN feedback =  1 THEN 1 ELSE 0 END), 0),
+			COALESCE(SUM(CASE WHEN feedback = -1 THEN 1 ELSE 0 END), 0),
 			AVG(response_ms)
 		FROM queries
 		WHERE created_at >= ?

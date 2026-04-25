@@ -97,11 +97,21 @@ export interface PromptVariant {
 }
 
 // ─── Auth ───────────────────────────────────────────────────────────────────
+//
+// M-9 Security: Access token is stored in sessionStorage, NOT localStorage.
+// sessionStorage:
+//   - Is cleared when the tab/browser is closed (no persistent XSS risk)
+//   - Is NOT shared between tabs (each admin session is isolated)
+//   - Is still vulnerable to XSS within the same page, but far less persistent
+//
+// The long-lived refresh token remains in an HttpOnly cookie (server-managed).
+// If the tab is closed, the user must re-authenticate via the refresh flow.
 
 const TOKEN_KEY = "admin_jwt";
-export const getToken = () => typeof window !== "undefined" ? localStorage.getItem(TOKEN_KEY) : null;
-export const setToken = (t: string) => localStorage.setItem(TOKEN_KEY, t);
-export const clearToken = () => localStorage.removeItem(TOKEN_KEY);
+export const getToken = () =>
+  typeof window !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) : null;
+export const setToken = (t: string) => sessionStorage.setItem(TOKEN_KEY, t);
+export const clearToken = () => sessionStorage.removeItem(TOKEN_KEY);
 
 // ─── Fetch ──────────────────────────────────────────────────────────────────
 
